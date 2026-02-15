@@ -239,8 +239,10 @@ func (r *DNSRouteOptionsActionOptions) UnmarshalJSON(data []byte) error {
 }
 
 type _RejectActionOptions struct {
-	Method string `json:"method,omitempty" enum:"default,drop,reply"`
-	NoDrop bool   `json:"no_drop,omitempty"`
+	Method      string             `json:"method,omitempty" enum:"default,drop,reply"`
+	NoDrop      bool               `json:"no_drop,omitempty"`
+	XDPBlock    bool               `json:"xdp_block,omitempty"`    //H
+	BanDuration badoption.Duration `json:"ban_duration,omitempty"` //H
 }
 
 type RejectActionOptions _RejectActionOptions

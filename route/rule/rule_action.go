@@ -74,9 +74,11 @@ func NewRuleAction(logger logger.ContextLogger, action option.RuleAction) (adapt
 		}, nil
 	case C.RuleActionTypeReject:
 		return &RuleActionReject{
-			Method: action.RejectOptions.Method,
-			NoDrop: action.RejectOptions.NoDrop,
-			logger: logger,
+			Method:      action.RejectOptions.Method,
+			NoDrop:      action.RejectOptions.NoDrop,
+			XDPBlock:    action.RejectOptions.XDPBlock,
+			BanDuration: time.Duration(action.RejectOptions.BanDuration),
+			logger:      logger,
 		}, nil
 	case C.RuleActionTypeHijackDNS:
 		return &RuleActionHijackDNS{}, nil
@@ -152,9 +154,11 @@ func NewDNSRuleAction(logger logger.ContextLogger, action option.DNSRuleAction) 
 		}
 	case C.RuleActionTypeReject:
 		return &RuleActionReject{
-			Method: action.RejectOptions.Method,
-			NoDrop: action.RejectOptions.NoDrop,
-			logger: logger,
+			Method:      action.RejectOptions.Method,
+			NoDrop:      action.RejectOptions.NoDrop,
+			XDPBlock:    action.RejectOptions.XDPBlock,
+			BanDuration: time.Duration(action.RejectOptions.BanDuration),
+			logger:      logger,
 		}
 	case C.RuleActionTypePredefined:
 		return &RuleActionPredefined{
@@ -424,6 +428,8 @@ func IsBypassed(err error) bool {
 type RuleActionReject struct {
 	Method      string
 	NoDrop      bool
+	XDPBlock    bool
+	BanDuration time.Duration
 	logger      logger.ContextLogger
 	dropAccess  sync.Mutex
 	dropCounter []time.Time
@@ -435,7 +441,13 @@ func (r *RuleActionReject) Type() string {
 
 func (r *RuleActionReject) String() string {
 	if r.Method == C.RuleActionRejectMethodDefault {
+		if r.XDPBlock {
+			return "reject(xdp-block)"
+		}
 		return "reject"
+	}
+	if r.XDPBlock {
+		return F.ToString("reject(", r.Method, ",xdp-block)")
 	}
 	return F.ToString("reject(", r.Method, ")")
 }
@@ -509,9 +521,20 @@ func (r *RuleActionSniff) build() error {
 		case C.ProtocolSTUN:
 			r.PacketSniffers = append(r.PacketSniffers, sniff.STUNMessage)
 		case C.ProtocolBitTorrent:
+			// Stream sniffers (TCP)
 			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrent)
+			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentMessage)
+			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentFAST)
+			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentExtended)
+			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentHTTP)
+			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentSignature)
+			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentMSE)
+			// Packet sniffers (UDP)
 			r.PacketSniffers = append(r.PacketSniffers, sniff.UTP)
 			r.PacketSniffers = append(r.PacketSniffers, sniff.UDPTracker)
+			r.PacketSniffers = append(r.PacketSniffers, sniff.BitTorrentDHTPacket)
+			r.PacketSniffers = append(r.PacketSniffers, sniff.BitTorrentLSD)
+			r.PacketSniffers = append(r.PacketSniffers, sniff.BitTorrentSignaturePacket)
 		case C.ProtocolDTLS:
 			r.PacketSniffers = append(r.PacketSniffers, sniff.DTLSRecord)
 		case C.ProtocolSSH:

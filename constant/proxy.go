@@ -68,6 +68,7 @@ const (
 	TypeMasterDNS      = "masterdns"  //H
 	TypeSoar           = "soar"       //H
 	TypeTrustTunnel    = "trusttunnel"
+	TypeXDPBlocker     = "xdp-blocker" //H
 )
 
 const (

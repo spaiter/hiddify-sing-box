@@ -25,9 +25,27 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/service"
 
 	"golang.org/x/exp/slices"
 )
+
+// xdpBlockIfBitTorrent asks the XDP blocker service to ban the source IP when a
+// rejected connection was sniffed as BitTorrent and the reject rule opted in. //H
+func (r *Router) xdpBlockIfBitTorrent(action *R.RuleActionReject, metadata adapter.InboundContext) {
+	if !action.XDPBlock || metadata.Protocol != C.ProtocolBitTorrent {
+		return
+	}
+	blocker := service.FromContext[adapter.XDPBlocker](r.ctx)
+	if blocker == nil {
+		return
+	}
+	dur := action.BanDuration
+	if dur == 0 {
+		dur = 5 * time.Hour
+	}
+	blocker.BlockIP(metadata.Source.Addr, dur)
+}
 
 var defaultPacketSniffers = []sniff.PacketSniffer{
 	sniff.DomainNameQuery,
@@ -142,6 +160,7 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 			if action.Method == C.RuleActionRejectMethodReply {
 				return E.New("reject method `reply` is not supported for TCP connections")
 			}
+			r.xdpBlockIfBitTorrent(action, metadata)
 			return action.Error(ctx)
 		case *R.RuleActionHijackDNS:
 			for _, buffer := range buffers {
@@ -274,6 +293,7 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 			if action.Method == C.RuleActionRejectMethodReply {
 				return E.New("reject method `reply` is not supported for UDP connections")
 			}
+			r.xdpBlockIfBitTorrent(action, metadata)
 			return action.Error(ctx)
 		case *R.RuleActionHijackDNS:
 			return r.hijackDNSPacket(ctx, conn, packetBuffers, metadata, onClose)
@@ -386,6 +406,7 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) a
 			}
 			return r.preMatchFlow(ctx, &metadata, packetDestination, currentRule, action.Outbound)
 		case *R.RuleActionReject:
+			r.xdpBlockIfBitTorrent(action, *metadata)
 			rejectErr := action.Error(r.ctx)
 			if errors.Is(rejectErr, R.ErrDrop) {
 				return adapter.PreMatchResult{Action: adapter.PreMatchDrop}

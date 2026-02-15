@@ -1,0 +1,14 @@
+.git/
+.github/
+.claude/
+sing-box/
+test/
+docs/
+examples/
+release/
+*.exe
+*.md
+mkdocs.yml
+LICENSE
+Dockerfile
+Dockerfile.*

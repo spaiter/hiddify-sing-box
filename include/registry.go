@@ -159,6 +159,7 @@ func ServiceRegistry() *service.Registry {
 	registerDERPService(registry)
 	registerCCMService(registry)
 	registerOCMService(registry)
+	registerXDPBlockerService(registry)
 
 	return registry
 }

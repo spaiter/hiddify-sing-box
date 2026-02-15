@@ -271,8 +271,10 @@ func (d *DirectActionOptions) UnmarshalJSON(data []byte) error {
 }
 
 type _RejectActionOptions struct {
-	Method string `json:"method,omitempty"`
-	NoDrop bool   `json:"no_drop,omitempty"`
+	Method      string             `json:"method,omitempty"`
+	NoDrop      bool               `json:"no_drop,omitempty"`
+	XDPBlock    bool               `json:"xdp_block,omitempty"`
+	BanDuration badoption.Duration `json:"ban_duration,omitempty"`
 }
 
 type RejectActionOptions _RejectActionOptions

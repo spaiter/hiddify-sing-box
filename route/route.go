@@ -28,6 +28,7 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/service"
 
 	"golang.org/x/exp/slices"
 )
@@ -131,6 +132,15 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 			buf.ReleaseMulti(buffers)
 			if action.Method == C.RuleActionRejectMethodReply {
 				return E.New("reject method `reply` is not supported for TCP connections")
+			}
+			if action.XDPBlock && metadata.Protocol == C.ProtocolBitTorrent {
+				if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
+					dur := action.BanDuration
+					if dur == 0 {
+						dur = 5 * time.Hour
+					}
+					blocker.BlockIP(metadata.Source.Addr, dur)
+				}
 			}
 			return action.Error(ctx)
 		case *R.RuleActionHijackDNS:
@@ -264,6 +274,15 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 			if action.Method == C.RuleActionRejectMethodReply {
 				return E.New("reject method `reply` is not supported for UDP connections")
 			}
+			if action.XDPBlock && metadata.Protocol == C.ProtocolBitTorrent {
+				if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
+					dur := action.BanDuration
+					if dur == 0 {
+						dur = 5 * time.Hour
+					}
+					blocker.BlockIP(metadata.Source.Addr, dur)
+				}
+			}
 			return action.Error(ctx)
 		case *R.RuleActionHijackDNS:
 			return r.hijackDNSPacket(ctx, conn, packetBuffers, metadata, onClose)
@@ -312,6 +331,15 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, routeContext tun.Dire
 			case N.NetworkUDP:
 				if action.Method == C.RuleActionRejectMethodReply {
 					return nil, E.New("reject method `reply` is not supported for UDP connections")
+				}
+			}
+			if action.XDPBlock && metadata.Protocol == C.ProtocolBitTorrent {
+				if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
+					dur := action.BanDuration
+					if dur == 0 {
+						dur = 5 * time.Hour
+					}
+					blocker.BlockIP(metadata.Source.Addr, dur)
 				}
 			}
 			return nil, action.Error(context.Background())

@@ -10,4 +10,6 @@ type XDPBlocker interface {
 	UnblockIP(ip netip.Addr) error
 	IsBlocked(ip netip.Addr) bool
 	BlockedCount() int
+	TrackUserIP(user string, ip netip.Addr)
+	BlockUserIPs(user string, duration time.Duration) error
 }

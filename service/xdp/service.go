@@ -5,6 +5,7 @@ package xdp
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -30,6 +31,8 @@ type Service struct {
 	banDuration     time.Duration
 	cleanupInterval time.Duration
 	logBlocked      bool
+	userIPs         map[string]map[netip.Addr]struct{}
+	userIPsMu       sync.RWMutex
 }
 
 func NewService(ctx context.Context, logger log.ContextLogger, tag string, options option.XDPBlockerServiceOptions) (adapter.Service, error) {
@@ -59,6 +62,7 @@ func NewService(ctx context.Context, logger log.ContextLogger, tag string, optio
 		banDuration:     banDuration,
 		cleanupInterval: cleanupInterval,
 		logBlocked:      logBlocked,
+		userIPs:         make(map[string]map[netip.Addr]struct{}),
 	}, nil
 }
 
@@ -101,9 +105,6 @@ func (s *Service) closeFilters() {
 }
 
 func (s *Service) BlockIP(ip netip.Addr, duration time.Duration) error {
-	if !ip.Is4() {
-		return nil
-	}
 	if duration == 0 {
 		duration = s.banDuration
 	}
@@ -126,9 +127,6 @@ func (s *Service) BlockIP(ip netip.Addr, duration time.Duration) error {
 }
 
 func (s *Service) UnblockIP(ip netip.Addr) error {
-	if !ip.Is4() {
-		return nil
-	}
 	var firstErr error
 	for _, filter := range s.filters {
 		if err := filter.MapManager().RemoveIP(ip); err != nil && firstErr == nil {
@@ -161,4 +159,44 @@ func (s *Service) BlockedCount() int {
 		return 0
 	}
 	return s.filters[0].MapManager().BlockedCount()
+}
+
+func (s *Service) TrackUserIP(user string, ip netip.Addr) {
+	if user == "" {
+		return
+	}
+	s.userIPsMu.Lock()
+	defer s.userIPsMu.Unlock()
+	ips, ok := s.userIPs[user]
+	if !ok {
+		ips = make(map[netip.Addr]struct{})
+		s.userIPs[user] = ips
+	}
+	ips[ip] = struct{}{}
+}
+
+func (s *Service) BlockUserIPs(user string, duration time.Duration) error {
+	if user == "" {
+		return nil
+	}
+	s.userIPsMu.RLock()
+	ips, ok := s.userIPs[user]
+	if !ok {
+		s.userIPsMu.RUnlock()
+		return nil
+	}
+	// Copy the IPs under read lock to avoid holding it during blocking
+	ipList := make([]netip.Addr, 0, len(ips))
+	for ip := range ips {
+		ipList = append(ipList, ip)
+	}
+	s.userIPsMu.RUnlock()
+
+	var firstErr error
+	for _, ip := range ipList {
+		if err := s.BlockIP(ip, duration); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

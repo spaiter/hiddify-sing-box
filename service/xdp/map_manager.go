@@ -16,15 +16,17 @@ import (
 
 type IPMapManager struct {
 	bpfMap     *ebpf.Map
+	bpfMapV6   *ebpf.Map
 	logger     logger.ContextLogger
 	logBlocked bool
 	mu         sync.RWMutex
 	localMap   map[netip.Addr]time.Time
 }
 
-func NewIPMapManager(bpfMap *ebpf.Map, logger logger.ContextLogger, logBlocked bool) *IPMapManager {
+func NewIPMapManager(bpfMap *ebpf.Map, bpfMapV6 *ebpf.Map, logger logger.ContextLogger, logBlocked bool) *IPMapManager {
 	return &IPMapManager{
 		bpfMap:     bpfMap,
+		bpfMapV6:   bpfMapV6,
 		logger:     logger,
 		logBlocked: logBlocked,
 		localMap:   make(map[netip.Addr]time.Time),
@@ -32,21 +34,23 @@ func NewIPMapManager(bpfMap *ebpf.Map, logger logger.ContextLogger, logBlocked b
 }
 
 func (m *IPMapManager) AddIP(ip netip.Addr, duration time.Duration) error {
-	if !ip.Is4() {
-		return nil
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	raw := ip.As4()
-	ipKey := binary.NativeEndian.Uint32(raw[:])
 
 	expiresAt := time.Now().Add(duration)
 	expiresAtSec := uint64(expiresAt.Unix())
 
-	if err := m.bpfMap.Put(&ipKey, &expiresAtSec); err != nil {
-		return err
+	if ip.Is4() {
+		raw := ip.As4()
+		ipKey := binary.NativeEndian.Uint32(raw[:])
+		if err := m.bpfMap.Put(&ipKey, &expiresAtSec); err != nil {
+			return err
+		}
+	} else {
+		ipKey := ip.As16()
+		if err := m.bpfMapV6.Put(&ipKey, &expiresAtSec); err != nil {
+			return err
+		}
 	}
 
 	m.localMap[ip] = expiresAt
@@ -54,18 +58,20 @@ func (m *IPMapManager) AddIP(ip netip.Addr, duration time.Duration) error {
 }
 
 func (m *IPMapManager) RemoveIP(ip netip.Addr) error {
-	if !ip.Is4() {
-		return nil
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	raw := ip.As4()
-	ipKey := binary.NativeEndian.Uint32(raw[:])
-
-	if err := m.bpfMap.Delete(&ipKey); err != nil {
-		return err
+	if ip.Is4() {
+		raw := ip.As4()
+		ipKey := binary.NativeEndian.Uint32(raw[:])
+		if err := m.bpfMap.Delete(&ipKey); err != nil {
+			return err
+		}
+	} else {
+		ipKey := ip.As16()
+		if err := m.bpfMapV6.Delete(&ipKey); err != nil {
+			return err
+		}
 	}
 
 	delete(m.localMap, ip)
@@ -73,10 +79,6 @@ func (m *IPMapManager) RemoveIP(ip netip.Addr) error {
 }
 
 func (m *IPMapManager) IsBlocked(ip netip.Addr) bool {
-	if !ip.Is4() {
-		return false
-	}
-
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -101,12 +103,19 @@ func (m *IPMapManager) CleanupExpired(ctx context.Context) int {
 
 	for ip, expiresAt := range m.localMap {
 		if now.After(expiresAt) {
-			raw := ip.As4()
-			ipKey := binary.NativeEndian.Uint32(raw[:])
-
-			if err := m.bpfMap.Delete(&ipKey); err != nil {
-				m.logger.DebugContext(ctx, "failed to remove expired IP ", ip, " from XDP map: ", err)
-				continue
+			if ip.Is4() {
+				raw := ip.As4()
+				ipKey := binary.NativeEndian.Uint32(raw[:])
+				if err := m.bpfMap.Delete(&ipKey); err != nil {
+					m.logger.DebugContext(ctx, "failed to remove expired IP ", ip, " from XDP map: ", err)
+					continue
+				}
+			} else {
+				ipKey := ip.As16()
+				if err := m.bpfMapV6.Delete(&ipKey); err != nil {
+					m.logger.DebugContext(ctx, "failed to remove expired IPv6 ", ip, " from XDP map: ", err)
+					continue
+				}
 			}
 
 			delete(m.localMap, ip)

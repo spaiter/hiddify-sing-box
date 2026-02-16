@@ -45,6 +45,11 @@ func (r *Router) xdpBlockIfBitTorrent(action *R.RuleActionReject, metadata adapt
 		dur = 5 * time.Hour
 	}
 	blocker.BlockIP(metadata.Source.Addr, dur)
+	// Block every known IP of the user so BitTorrent can't continue over the
+	// other address family (dual-stack bypass). //H
+	if metadata.User != "" {
+		blocker.BlockUserIPs(metadata.User, dur)
+	}
 }
 
 var defaultPacketSniffers = []sniff.PacketSniffer{
@@ -104,6 +109,11 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 		metadata.InboundDetour = ""
 		injectable.NewConnection(ctx, conn, metadata, onClose)
 		return nil
+	}
+	if metadata.User != "" {
+		if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
+			blocker.TrackUserIP(metadata.User, metadata.Source.Addr)
+		}
 	}
 	metadata.Network = N.NetworkTCP
 	switch metadata.Destination.Fqdn {
@@ -244,6 +254,11 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		metadata.InboundDetour = ""
 		injectable.NewPacketConnection(ctx, conn, metadata, onClose)
 		return nil
+	}
+	if metadata.User != "" {
+		if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
+			blocker.TrackUserIP(metadata.User, metadata.Source.Addr)
+		}
 	}
 	// TODO: move to UoT
 	metadata.Network = N.NetworkUDP

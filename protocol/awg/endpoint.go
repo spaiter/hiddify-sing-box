@@ -16,6 +16,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/transport/awg"
+	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/bufio"
 	"github.com/sagernet/sing/common/format"
 	M "github.com/sagernet/sing/common/metadata"
@@ -80,25 +81,30 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		return nil, err
 	}
 
+	ep := &Endpoint{
+		Adapter: endpoint.NewAdapterWithDialerOptions("awg", tag, []string{N.NetworkTCP, N.NetworkUDP}, options.DialerOptions),
+		address: options.Address,
+		router:  router,
+		logger:  logger,
+		ctx:     ctx,
+	}
+
 	dev, err := awg.NewDevice(ctx, logger, dial, ipc, awg.DeviceOpts{
 		UseIntegratedTun: options.UseIntegratedTun,
 		Address:          options.Address,
 		AllowedIps:       allowedIps.Prefixes(),
 		ExcludedIps:      excludedIps.Prefixes(),
 		MTU:              options.MTU,
+		Handler:          ep,
+		UDPTimeout:       constant.UDPTimeout,
+		Context:          ctx,
 	})
 	if err != nil {
 		return nil, err
 	}
+	ep.Device = dev
 
-	return &Endpoint{
-		Device:  dev,
-		Adapter: endpoint.NewAdapterWithDialerOptions("awg", tag, []string{N.NetworkTCP, N.NetworkUDP}, options.DialerOptions),
-		address: options.Address,
-		router:  router,
-		logger:  logger,
-		ctx:     ctx,
-	}, nil
+	return ep, nil
 }
 
 func genIpcConfig(opts option.AwgEndpointOptions) (string, error) {
@@ -183,6 +189,10 @@ func genIpcConfig(opts option.AwgEndpointOptions) (string, error) {
 		}
 	}
 	return s, nil
+}
+
+func (e *Endpoint) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr, routeContext tun.DirectRouteContext, timeout time.Duration) (tun.DirectRouteDestination, error) {
+	return nil, nil
 }
 
 func (e *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {

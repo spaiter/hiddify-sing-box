@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
@@ -14,8 +15,9 @@ import (
 	"github.com/sagernet/sing/common/exceptions"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
-	"github.com/sagernet/sing/common/metadata"
-	"github.com/sagernet/sing/common/network"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	singTun "github.com/sagernet/sing-tun"
 )
 
 type DeviceOpts struct {
@@ -24,6 +26,9 @@ type DeviceOpts struct {
 	AllowedIps       []netip.Prefix
 	ExcludedIps      []netip.Prefix
 	MTU              uint32
+	Handler          singTun.Handler
+	UDPTimeout       time.Duration
+	Context          context.Context
 }
 
 type Device struct {
@@ -34,7 +39,7 @@ type Device struct {
 	ipcConfig string
 }
 
-func NewDevice(ctx context.Context, logger logger.ContextLogger, dial network.Dialer, ipcConfig string, opts DeviceOpts) (*Device, error) {
+func NewDevice(ctx context.Context, logger logger.ContextLogger, dial N.Dialer, ipcConfig string, opts DeviceOpts) (*Device, error) {
 	var (
 		tun tunAdapter
 		err error
@@ -44,6 +49,11 @@ func NewDevice(ctx context.Context, logger logger.ContextLogger, dial network.Di
 		tun, err = newSystemTun(ctx, opts.Address, opts.AllowedIps, opts.ExcludedIps, opts.MTU, logger)
 		if err != nil {
 			return nil, exceptions.Cause(err, "create tunnel")
+		}
+	} else if opts.Handler != nil {
+		tun, err = newStackTun(ctx, opts.Address, opts.MTU, opts.Handler, opts.UDPTimeout)
+		if err != nil {
+			return nil, exceptions.Cause(err, "create stack tunnel")
 		}
 	} else {
 		tun, err = newNetworkTun(opts.Address, opts.MTU)
@@ -93,10 +103,10 @@ func (d *Device) Close() error {
 	return nil
 }
 
-func (d *Device) DialContext(ctx context.Context, network string, destination metadata.Socksaddr) (net.Conn, error) {
+func (d *Device) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	return d.tun.DialContext(ctx, network, destination)
 }
 
-func (d *Device) ListenPacket(ctx context.Context, destination metadata.Socksaddr) (net.PacketConn, error) {
+func (d *Device) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
 	return d.tun.ListenPacket(ctx, destination)
 }

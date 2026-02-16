@@ -1,7 +1,6 @@
 package awg
 
 import (
-	"context"
 	"errors"
 	"net"
 	"net/netip"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	E "github.com/sagernet/sing/common/exceptions"
-	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
 
@@ -20,7 +18,6 @@ type bind_adapter struct {
 	conn4  net.PacketConn
 	conn6  net.PacketConn
 	dialer N.Dialer
-	ctx    context.Context
 	mutex  sync.Mutex
 }
 
@@ -30,8 +27,12 @@ func newBind(dial N.Dialer) conn.Bind {
 	}
 }
 
-func (b *bind_adapter) connect(addr netip.Addr, port uint16) (net.PacketConn, error) {
-	return b.dialer.ListenPacket(b.ctx, M.Socksaddr{Addr: addr, Port: port})
+func (b *bind_adapter) listen(addr netip.Addr, port uint16) (net.PacketConn, error) {
+	network := "udp4"
+	if addr.Is6() {
+		network = "udp6"
+	}
+	return net.ListenPacket(network, netip.AddrPortFrom(addr, port).String())
 }
 
 func (b *bind_adapter) receive(c net.PacketConn) conn.ReceiveFunc {
@@ -60,7 +61,7 @@ func (b *bind_adapter) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uin
 		return nil, 0, conn.ErrBindAlreadyOpen
 	}
 
-	conn4, err := b.connect(netip.IPv4Unspecified(), port)
+	conn4, err := b.listen(netip.IPv4Unspecified(), port)
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 		return nil, 0, E.Cause(err, "create ipv4 connection")
 	}
@@ -68,7 +69,7 @@ func (b *bind_adapter) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uin
 		fns = append(fns, b.receive(conn4))
 	}
 
-	conn6, err := b.connect(netip.IPv6Unspecified(), port)
+	conn6, err := b.listen(netip.IPv6Unspecified(), port)
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 		return nil, 0, E.Cause(err, "create ipv6 connection")
 	}

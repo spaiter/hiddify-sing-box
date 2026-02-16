@@ -8,9 +8,15 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
+
+type bpfIn6Key struct {
+	_    structs.HostLayout
+	Addr [16]uint8
+}
 
 // loadBpf returns the embedded CollectionSpec for bpf.
 func loadBpf() (*ebpf.CollectionSpec, error) {
@@ -61,7 +67,8 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	BlockedIps *ebpf.MapSpec `ebpf:"blocked_ips"`
+	BlockedIps   *ebpf.MapSpec `ebpf:"blocked_ips"`
+	BlockedIpsV6 *ebpf.MapSpec `ebpf:"blocked_ips_v6"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
@@ -90,12 +97,14 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	BlockedIps *ebpf.Map `ebpf:"blocked_ips"`
+	BlockedIps   *ebpf.Map `ebpf:"blocked_ips"`
+	BlockedIpsV6 *ebpf.Map `ebpf:"blocked_ips_v6"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
 		m.BlockedIps,
+		m.BlockedIpsV6,
 	)
 }
 

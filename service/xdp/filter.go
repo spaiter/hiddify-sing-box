@@ -39,7 +39,7 @@ func NewFilter(ifaceName string, logger logger.ContextLogger, logBlocked bool) (
 		return nil, err
 	}
 
-	mapMgr := NewIPMapManager(objs.BlockedIps, logger, logBlocked)
+	mapMgr := NewIPMapManager(objs.BlockedIps, objs.BlockedIpsV6, logger, logBlocked)
 
 	return &Filter{
 		ifaceName: ifaceName,

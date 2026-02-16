@@ -4,6 +4,8 @@ package xdp
 
 import (
 	"context"
+	"net/netip"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	boxService "github.com/sagernet/sing-box/adapter/service"
@@ -18,3 +20,13 @@ func RegisterService(registry *boxService.Registry) {
 		return nil, E.New("XDP blocker is only supported on Linux with -tags with_xdp")
 	})
 }
+
+// Stub type to satisfy interface at compile time when needed.
+type stubService struct{}
+
+func (s *stubService) BlockIP(netip.Addr, time.Duration) error    { return nil }
+func (s *stubService) UnblockIP(netip.Addr) error                 { return nil }
+func (s *stubService) IsBlocked(netip.Addr) bool                  { return false }
+func (s *stubService) BlockedCount() int                           { return 0 }
+func (s *stubService) TrackUserIP(string, netip.Addr)              {}
+func (s *stubService) BlockUserIPs(string, time.Duration) error    { return nil }

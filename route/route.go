@@ -82,6 +82,11 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 		return nil
 	}
 	conntrack.KillerCheck()
+	if metadata.User != "" {
+		if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
+			blocker.TrackUserIP(metadata.User, metadata.Source.Addr)
+		}
+	}
 	metadata.Network = N.NetworkTCP
 	switch metadata.Destination.Fqdn {
 	case mux.Destination.Fqdn:
@@ -140,6 +145,9 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 						dur = 5 * time.Hour
 					}
 					blocker.BlockIP(metadata.Source.Addr, dur)
+					if metadata.User != "" {
+						blocker.BlockUserIPs(metadata.User, dur)
+					}
 				}
 			}
 			return action.Error(ctx)
@@ -227,6 +235,11 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		return nil
 	}
 	conntrack.KillerCheck()
+	if metadata.User != "" {
+		if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
+			blocker.TrackUserIP(metadata.User, metadata.Source.Addr)
+		}
+	}
 
 	// TODO: move to UoT
 	metadata.Network = N.NetworkUDP
@@ -281,6 +294,9 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 						dur = 5 * time.Hour
 					}
 					blocker.BlockIP(metadata.Source.Addr, dur)
+					if metadata.User != "" {
+						blocker.BlockUserIPs(metadata.User, dur)
+					}
 				}
 			}
 			return action.Error(ctx)
@@ -340,6 +356,9 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, routeContext tun.Dire
 						dur = 5 * time.Hour
 					}
 					blocker.BlockIP(metadata.Source.Addr, dur)
+					if metadata.User != "" {
+						blocker.BlockUserIPs(metadata.User, dur)
+					}
 				}
 			}
 			return nil, action.Error(context.Background())

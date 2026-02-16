@@ -230,8 +230,8 @@ func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.
 }
 
 func (o *Endpoint) Start(stage adapter.StartStage) error {
-	if stage != adapter.StartStateStart {
-		// return o.endpoint.Start(false)
+	if err := o.Device.Start(stage); err != nil {
+		return err
 	}
 	if stage == adapter.StartStatePostStart {
 		go o.readyChecker()

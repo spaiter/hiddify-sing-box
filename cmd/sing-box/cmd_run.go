@@ -9,9 +9,11 @@ import (
 	runtimeDebug "runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/sagernet/fswatch"
 	"github.com/sagernet/sing-box"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
@@ -23,19 +25,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var commandRun = &cobra.Command{
-	Use:   "run",
-	Short: "Run service",
-	Run: func(cmd *cobra.Command, args []string) {
-		err := run()
-		if err != nil {
-			log.Fatal(err)
-		}
-	},
-}
+var (
+	commandRun = &cobra.Command{
+		Use:   "run",
+		Short: "Run service",
+		Run: func(cmd *cobra.Command, args []string) {
+			err := run()
+			if err != nil {
+				log.Fatal(err)
+			}
+		},
+	}
+	watchConfig bool
+)
 
 func init() {
 	mainCommand.AddCommand(commandRun)
+	commandRun.Flags().BoolVar(&watchConfig, "watch", false, "Watch config files for changes and auto-reload")
 }
 
 type OptionsEntry struct {
@@ -122,6 +128,19 @@ func readConfigAndMerge() (option.Options, error) {
 	return mergedOptions, nil
 }
 
+func newInstance(options option.Options) (*box.Box, context.Context, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(globalCtx)
+	instance, err := box.New(box.Options{
+		Context: ctx,
+		Options: options,
+	})
+	if err != nil {
+		cancel()
+		return nil, nil, nil, E.Cause(err, "create service")
+	}
+	return instance, ctx, cancel, nil
+}
+
 func create() (*box.Box, context.CancelFunc, error) {
 	options, err := readConfigAndMerge()
 	if err != nil {
@@ -133,14 +152,9 @@ func create() (*box.Box, context.CancelFunc, error) {
 		}
 		options.Log.DisableColor = true
 	}
-	ctx, cancel := context.WithCancel(globalCtx)
-	instance, err := box.New(box.Options{
-		Context: ctx,
-		Options: options,
-	})
+	instance, _, cancel, err := newInstance(options)
 	if err != nil {
-		cancel()
-		return nil, nil, E.Cause(err, "create service")
+		return nil, nil, err
 	}
 
 	osSignals := make(chan os.Signal, 1)
@@ -166,10 +180,66 @@ func create() (*box.Box, context.CancelFunc, error) {
 	return instance, cancel, nil
 }
 
+func createWithPreStart(options option.Options) (*box.Box, context.CancelFunc, error) {
+	instance, _, cancel, err := newInstance(options)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = instance.PreStart()
+	if err != nil {
+		cancel()
+		return nil, nil, E.Cause(err, "pre-start service")
+	}
+	return instance, cancel, nil
+}
+
 func run() error {
 	osSignals := make(chan os.Signal, 1)
 	signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(osSignals)
+
+	var (
+		watcher     *fswatch.Watcher
+		reloadChan  chan struct{}
+		debounceMu  sync.Mutex
+		debounceTimer *time.Timer
+	)
+
+	if watchConfig {
+		reloadChan = make(chan struct{}, 1)
+		var watchPaths []string
+		watchPaths = append(watchPaths, configPaths...)
+		watchPaths = append(watchPaths, configDirectories...)
+		if len(watchPaths) > 0 {
+			var err error
+			watcher, err = fswatch.NewWatcher(fswatch.Options{
+				Path: watchPaths,
+				Callback: func(_ string) {
+					debounceMu.Lock()
+					defer debounceMu.Unlock()
+					if debounceTimer != nil {
+						debounceTimer.Stop()
+					}
+					debounceTimer = time.AfterFunc(time.Second, func() {
+						select {
+						case reloadChan <- struct{}{}:
+						default:
+						}
+					})
+				},
+			})
+			if err != nil {
+				return E.Cause(err, "create config file watcher")
+			}
+			defer watcher.Close()
+			err = watcher.Start()
+			if err != nil {
+				return E.Cause(err, "start config file watcher")
+			}
+			log.Info("watching config files for changes")
+		}
+	}
+
 	for {
 		instance, cancel, err := create()
 		if err != nil {
@@ -177,26 +247,78 @@ func run() error {
 		}
 		runtimeDebug.FreeOSMemory()
 		for {
-			osSignal := <-osSignals
-			if osSignal == syscall.SIGHUP {
-				err = check()
-				if err != nil {
-					log.Error(E.Cause(err, "reload service"))
-					continue
+			var reload bool
+			if reloadChan != nil {
+				select {
+				case osSignal := <-osSignals:
+					if osSignal == syscall.SIGHUP {
+						reload = true
+					}
+				case <-reloadChan:
+					reload = true
+				}
+			} else {
+				osSignal := <-osSignals
+				if osSignal == syscall.SIGHUP {
+					reload = true
 				}
 			}
-			cancel()
-			closeCtx, closed := context.WithCancel(context.Background())
-			go closeMonitor(closeCtx)
-			err = instance.Close()
-			closed()
-			if osSignal != syscall.SIGHUP {
+
+			if !reload {
+				// SIGINT or SIGTERM — shut down
+				cancel()
+				closeCtx, closed := context.WithCancel(context.Background())
+				go closeMonitor(closeCtx)
+				err = instance.Close()
+				closed()
 				if err != nil {
 					log.Error(E.Cause(err, "sing-box did not closed properly"))
 				}
 				return nil
 			}
-			break
+
+			// Reload: read and validate new config
+			log.Info("config reload triggered, reading new config...")
+			options, err := readConfigAndMerge()
+			if err != nil {
+				log.Error(E.Cause(err, "reload: read config"))
+				continue
+			}
+			if disableColor {
+				if options.Log == nil {
+					options.Log = &option.LogOptions{}
+				}
+				options.Log.DisableColor = true
+			}
+
+			// PreStart new instance (outbounds, DNS, routing — not inbounds)
+			newInstance, newCancel, err := createWithPreStart(options)
+			if err != nil {
+				log.Error(E.Cause(err, "reload: pre-start new service"))
+				continue
+			}
+
+			// Close old instance (releases ports)
+			cancel()
+			closeCtx, closed := context.WithCancel(context.Background())
+			go closeMonitor(closeCtx)
+			err = instance.Close()
+			closed()
+			if err != nil {
+				log.Error(E.Cause(err, "reload: close old service"))
+			}
+
+			// FinishStart new instance (binds ports, starts inbounds)
+			err = newInstance.FinishStart()
+			if err != nil {
+				newCancel()
+				log.Fatal(E.Cause(err, "reload: finish start new service"))
+			}
+
+			instance = newInstance
+			cancel = newCancel
+			runtimeDebug.FreeOSMemory()
+			continue
 		}
 	}
 }

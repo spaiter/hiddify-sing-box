@@ -261,6 +261,12 @@ docs_install:
 	python -m venv venv
 	source ./venv/bin/activate && pip install --force-reinstall mkdocs-material=="9.*" mkdocs-static-i18n=="1.2.*"
 
+swagger:
+	swag init -g experimental/clashapi/doc.go -o experimental/clashapi/docs --parseDependency --parseInternal
+
+swagger_install:
+	go install github.com/swaggo/swag/cmd/swag@latest
+
 clean:
 	rm -rf bin dist sing-box
 	rm -f $(shell go env GOPATH)/sing-box

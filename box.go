@@ -466,6 +466,25 @@ func (s *Box) Start() error {
 	return nil
 }
 
+func (s *Box) FinishStart() error {
+	err := s.finishStart()
+	if err != nil {
+		// TODO: remove catch error
+		defer func() {
+			v := recover()
+			if v != nil {
+				println(err.Error())
+				debug.PrintStack()
+				println("panic on finish start: " + fmt.Sprint(v))
+			}
+		}()
+		s.Close()
+		return err
+	}
+	s.logger.Info("sing-box started (", F.Seconds(time.Since(s.createdAt).Seconds()), "s)")
+	return nil
+}
+
 func (s *Box) preStart() error {
 	monitor := taskmonitor.New(s.logger, C.StartTimeout)
 	monitor.Start("start logger")
@@ -494,7 +513,11 @@ func (s *Box) start() error {
 	if err != nil {
 		return err
 	}
-	err = adapter.StartNamed(s.logger, adapter.StartStateStart, s.internalService)
+	return s.finishStart()
+}
+
+func (s *Box) finishStart() error {
+	err := adapter.StartNamed(s.logger, adapter.StartStateStart, s.internalService)
 	if err != nil {
 		return err
 	}

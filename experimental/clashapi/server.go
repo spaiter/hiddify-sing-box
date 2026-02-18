@@ -52,6 +52,8 @@ type Server struct {
 	urlTestHistory adapter.URLTestHistoryStorage
 	logDebug       bool
 
+	configManager *ConfigManager
+
 	mode           string
 	modeList       []string
 	modeUpdateHook *observable.Subscriber[struct{}]
@@ -86,6 +88,9 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 	s.urlTestHistory = service.FromContext[adapter.URLTestHistoryStorage](ctx)
 	if s.urlTestHistory == nil {
 		s.urlTestHistory = urltest.NewHistoryStorage()
+	}
+	if options.ConfigOutputPath != "" {
+		s.configManager = NewConfigManager(ctx, filemanager.BasePath(ctx, os.ExpandEnv(options.ConfigOutputPath)))
 	}
 	defaultMode := "Rule"
 	if options.DefaultMode != "" {
@@ -130,6 +135,9 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		r.Mount("/dns", dnsRouter(s.dnsRouter))
 
 		s.setupMetaAPI(r)
+		if s.configManager != nil {
+			r.Mount("/manage", manageRouter(s, logFactory))
+		}
 	})
 	if options.ExternalUI != "" {
 		s.externalUI = filemanager.BasePath(ctx, os.ExpandEnv(options.ExternalUI))

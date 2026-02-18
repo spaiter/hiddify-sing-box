@@ -23,6 +23,9 @@ CLAUDE.md
 AGENTS.md
 /.claude/
 /examples/server/
+/Hiddify-Manager/
+/hiddify-app/
+/s-ui/
 
 # Playwright
 node_modules/

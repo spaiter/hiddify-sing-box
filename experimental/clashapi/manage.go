@@ -25,6 +25,13 @@ func manageRouter(s *Server, logFactory log.Factory) http.Handler {
 	r.Put("/inbounds/{tag}", updateInbound(s))
 	r.Delete("/inbounds/{tag}", deleteInbound(s))
 
+	// Endpoint CRUD
+	r.Get("/endpoints", listEndpoints(s))
+	r.Post("/endpoints", addEndpoint(s))
+	r.Get("/endpoints/{tag}", getEndpoint(s))
+	r.Put("/endpoints/{tag}", updateEndpoint(s))
+	r.Delete("/endpoints/{tag}", deleteEndpoint(s))
+
 	// User CRUD
 	r.Get("/inbounds/{tag}/users", listUsers(s))
 	r.Post("/inbounds/{tag}/users", addUser(s))
@@ -241,6 +248,199 @@ func deleteInbound(s *Server) http.HandlerFunc {
 			for i, inbound := range options.Inbounds {
 				if inbound.Tag == tag {
 					options.Inbounds = append(options.Inbounds[:i], options.Inbounds[i+1:]...)
+					return options, nil
+				}
+			}
+			return options, ErrNotFound
+		})
+		if err != nil {
+			writeModifyError(w, r, err)
+			return
+		}
+		render.NoContent(w, r)
+	}
+}
+
+// Endpoint handlers
+
+type endpointSummary struct {
+	Tag  string `json:"tag"`
+	Type string `json:"type"`
+}
+
+// @Summary List endpoints
+// @Tags Endpoints
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} endpointSummary
+// @Failure 500 {object} HTTPError
+// @Router /manage/endpoints [get]
+func listEndpoints(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		options, err := s.configManager.ReadConfig()
+		if err != nil {
+			render.Status(r, http.StatusInternalServerError)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+		summaries := make([]endpointSummary, len(options.Endpoints))
+		for i, endpoint := range options.Endpoints {
+			summaries[i] = endpointSummary{
+				Tag:  endpoint.Tag,
+				Type: endpoint.Type,
+			}
+		}
+		render.JSON(w, r, summaries)
+	}
+}
+
+// @Summary Get endpoint by tag
+// @Tags Endpoints
+// @Produce json
+// @Security BearerAuth
+// @Param tag path string true "Endpoint tag"
+// @Success 200 {object} option.Endpoint
+// @Failure 404 {object} HTTPError
+// @Failure 500 {object} HTTPError
+// @Router /manage/endpoints/{tag} [get]
+func getEndpoint(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tag := getEscapeParam(r, "tag")
+		options, err := s.configManager.ReadConfig()
+		if err != nil {
+			render.Status(r, http.StatusInternalServerError)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+		for _, endpoint := range options.Endpoints {
+			if endpoint.Tag == tag {
+				data, err := json.MarshalContext(s.ctx, endpoint)
+				if err != nil {
+					render.Status(r, http.StatusInternalServerError)
+					render.JSON(w, r, newError(err.Error()))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+				return
+			}
+		}
+		render.Status(r, http.StatusNotFound)
+		render.JSON(w, r, ErrNotFound)
+	}
+}
+
+// @Summary Add new endpoint
+// @Tags Endpoints
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param endpoint body object true "Endpoint config (must include type and tag)"
+// @Success 201 {object} object{message=string}
+// @Failure 400 {object} HTTPError
+// @Failure 409 {object} HTTPError
+// @Failure 500 {object} HTTPError
+// @Router /manage/endpoints [post]
+func addEndpoint(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, ErrBadRequest)
+			return
+		}
+		var endpoint option.Endpoint
+		err = endpoint.UnmarshalJSONContext(s.ctx, body)
+		if err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+		if endpoint.Tag == "" {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError("endpoint tag is required"))
+			return
+		}
+		err = s.configManager.ModifyConfig(func(options option.Options) (option.Options, error) {
+			for _, existing := range options.Endpoints {
+				if existing.Tag == endpoint.Tag {
+					return options, &conflictError{Message: "endpoint " + endpoint.Tag + " already exists"}
+				}
+			}
+			options.Endpoints = append(options.Endpoints, endpoint)
+			return options, nil
+		})
+		if err != nil {
+			writeModifyError(w, r, err)
+			return
+		}
+		render.Status(r, http.StatusCreated)
+		render.JSON(w, r, render.M{"message": "endpoint added"})
+	}
+}
+
+// @Summary Replace endpoint
+// @Tags Endpoints
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param tag path string true "Endpoint tag"
+// @Param endpoint body object true "New endpoint config"
+// @Success 200 {object} object{message=string}
+// @Failure 400 {object} HTTPError
+// @Failure 404 {object} HTTPError
+// @Failure 500 {object} HTTPError
+// @Router /manage/endpoints/{tag} [put]
+func updateEndpoint(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tag := getEscapeParam(r, "tag")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, ErrBadRequest)
+			return
+		}
+		var endpoint option.Endpoint
+		err = endpoint.UnmarshalJSONContext(s.ctx, body)
+		if err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+		err = s.configManager.ModifyConfig(func(options option.Options) (option.Options, error) {
+			for i, existing := range options.Endpoints {
+				if existing.Tag == tag {
+					endpoint.Tag = tag
+					options.Endpoints[i] = endpoint
+					return options, nil
+				}
+			}
+			return options, ErrNotFound
+		})
+		if err != nil {
+			writeModifyError(w, r, err)
+			return
+		}
+		render.JSON(w, r, render.M{"message": "endpoint updated"})
+	}
+}
+
+// @Summary Remove endpoint
+// @Tags Endpoints
+// @Produce json
+// @Security BearerAuth
+// @Param tag path string true "Endpoint tag"
+// @Success 204
+// @Failure 404 {object} HTTPError
+// @Failure 500 {object} HTTPError
+// @Router /manage/endpoints/{tag} [delete]
+func deleteEndpoint(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tag := getEscapeParam(r, "tag")
+		err := s.configManager.ModifyConfig(func(options option.Options) (option.Options, error) {
+			for i, endpoint := range options.Endpoints {
+				if endpoint.Tag == tag {
+					options.Endpoints = append(options.Endpoints[:i], options.Endpoints[i+1:]...)
 					return options, nil
 				}
 			}

@@ -143,6 +143,54 @@ test.describe('Inbounds Tab', () => {
   });
 });
 
+test.describe('Endpoints Tab', () => {
+  test('lists existing endpoints', async ({ page }) => {
+    await login(page);
+    await page.click('nav.tabs button[data-tab="endpoints"]');
+    await expect(page.locator('#endpoints')).toHaveClass(/active/);
+
+    const rows = page.locator('#endpointsBody tr');
+    await expect(rows).toHaveCount(1);
+
+    await expect(page.locator('#endpointsBody')).toContainText('awg-ep');
+    await expect(page.locator('#endpointsBody')).toContainText('awg');
+  });
+
+  test('edit endpoint opens dialog with JSON', async ({ page }) => {
+    await login(page);
+    await page.click('nav.tabs button[data-tab="endpoints"]');
+
+    await page.locator('#endpointsBody button', { hasText: 'Edit' }).first().click();
+
+    const dialog = page.locator('#endpointDialog');
+    await expect(dialog).toBeVisible();
+
+    const json = await page.locator('#endpointJson').inputValue();
+    expect(json.length).toBeGreaterThan(10);
+    const parsed = JSON.parse(json);
+    expect(parsed.type).toBe('awg');
+
+    await page.locator('#endpointDialog button', { hasText: 'Cancel' }).click();
+  });
+
+  test('add endpoint dialog opens empty', async ({ page }) => {
+    await login(page);
+    await page.click('nav.tabs button[data-tab="endpoints"]');
+
+    await page.locator('#endpoints button', { hasText: 'Add Endpoint' }).click();
+    const dialog = page.locator('#endpointDialog');
+    await expect(dialog).toBeVisible();
+
+    const title = page.locator('#endpointDialogTitle');
+    await expect(title).toHaveText('Add Endpoint');
+
+    const json = await page.locator('#endpointJson').inputValue();
+    expect(json).toBe('');
+
+    await page.locator('#endpointDialog button', { hasText: 'Cancel' }).click();
+  });
+});
+
 test.describe('Users Tab', () => {
   test('shows inbound selector', async ({ page }) => {
     await login(page);
@@ -263,7 +311,7 @@ test.describe('Tab Navigation', () => {
   test('all tabs are clickable and switch content', async ({ page }) => {
     await login(page);
 
-    const tabs = ['dashboard', 'config', 'inbounds', 'users', 'connections'];
+    const tabs = ['dashboard', 'config', 'inbounds', 'endpoints', 'users', 'connections'];
     for (const tab of tabs) {
       await page.click(`nav.tabs button[data-tab="${tab}"]`);
       await expect(page.locator(`#${tab}`)).toHaveClass(/active/);

@@ -70,6 +70,7 @@ dialog .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
   <button class="active" data-tab="dashboard">Dashboard</button>
   <button data-tab="config">Config</button>
   <button data-tab="inbounds">Inbounds</button>
+  <button data-tab="endpoints">Endpoints</button>
   <button data-tab="users">Users</button>
   <button data-tab="connections">Connections</button>
 </nav>
@@ -100,6 +101,19 @@ dialog .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
     <table>
       <thead><tr><th>Tag</th><th>Type</th><th style="width:120px">Actions</th></tr></thead>
       <tbody id="inboundsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="endpoints" class="tab-content">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+    <h3 style="margin:0;color:#eee">Endpoints</h3>
+    <button class="btn" onclick="showAddEndpoint()">Add Endpoint</button>
+  </div>
+  <div class="card" style="padding:0;overflow:auto">
+    <table>
+      <thead><tr><th>Tag</th><th>Type</th><th style="width:120px">Actions</th></tr></thead>
+      <tbody id="endpointsBody"></tbody>
     </table>
   </div>
 </div>
@@ -143,6 +157,15 @@ dialog .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
   </div>
 </dialog>
 
+<dialog id="endpointDialog">
+  <h3 id="endpointDialogTitle">Add Endpoint</h3>
+  <textarea id="endpointJson" placeholder='{"type":"awg","tag":"my-awg","private_key":"...","address":["10.0.0.1/24"],...}'></textarea>
+  <div class="actions">
+    <button class="btn btn-outline" onclick="endpointDialog.close()">Cancel</button>
+    <button class="btn" id="endpointDialogSave" onclick="saveEndpoint()">Save</button>
+  </div>
+</dialog>
+
 <dialog id="userDialog">
   <h3 id="userDialogTitle">Add User</h3>
   <div id="userFormFields"></div>
@@ -169,6 +192,7 @@ let TOKEN = localStorage.getItem('sb-panel-token') || '';
 let trafficWs = null;
 let connInterval = null;
 let editingInboundTag = null;
+let editingEndpointTag = null;
 let editingUserName = null;
 let currentInbounds = [];
 
@@ -288,6 +312,7 @@ $$('nav.tabs button').forEach(btn => {
     $('#' + tab).classList.add('active');
     if (tab === 'config') loadConfig();
     if (tab === 'inbounds') loadInbounds();
+    if (tab === 'endpoints') loadEndpoints();
     if (tab === 'users') loadInboundSelect();
     if (tab === 'connections') startConnPolling();
     if (tab !== 'connections') stopConnPolling();
@@ -415,6 +440,81 @@ function confirmDeleteInbound(tag) {
       showToast('Inbound deleted', 'success');
       confirmDialog.close();
       loadInbounds();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+  confirmDialog.showModal();
+}
+
+// --- Endpoints ---
+async function loadEndpoints() {
+  try {
+    const list = await api('/manage/endpoints');
+    const body = $('#endpointsBody');
+    if (!list || list.length === 0) {
+      body.innerHTML = '<tr><td colspan="3" class="empty">No endpoints</td></tr>';
+      return;
+    }
+    body.innerHTML = list.map(ep => `<tr>
+      <td>${escapeHtml(ep.tag)}</td>
+      <td>${escapeHtml(ep.type)}</td>
+      <td>
+        <button class="btn btn-sm btn-outline" onclick="showEditEndpoint('${escapeHtml(ep.tag)}')">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="confirmDeleteEndpoint('${escapeHtml(ep.tag)}')">Delete</button>
+      </td>
+    </tr>`).join('');
+  } catch (e) {
+    showToast('Failed to load endpoints: ' + e.message, 'error');
+  }
+}
+
+function showAddEndpoint() {
+  editingEndpointTag = null;
+  $('#endpointDialogTitle').textContent = 'Add Endpoint';
+  $('#endpointJson').value = '';
+  $('#endpointDialogSave').textContent = 'Add';
+  endpointDialog.showModal();
+}
+
+async function showEditEndpoint(tag) {
+  editingEndpointTag = tag;
+  $('#endpointDialogTitle').textContent = 'Edit Endpoint: ' + tag;
+  $('#endpointDialogSave').textContent = 'Save';
+  try {
+    const data = await api('/manage/endpoints/' + encodeURIComponent(tag));
+    $('#endpointJson').value = JSON.stringify(data, null, 2);
+    endpointDialog.showModal();
+  } catch (e) {
+    showToast('Failed to load endpoint: ' + e.message, 'error');
+  }
+}
+
+async function saveEndpoint() {
+  const raw = $('#endpointJson').value.trim();
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { showToast('Invalid JSON', 'error'); return; }
+  try {
+    if (editingEndpointTag) {
+      await api('/manage/endpoints/' + encodeURIComponent(editingEndpointTag), { method: 'PUT', body: raw, headers: { 'Content-Type': 'application/json' } });
+      showToast('Endpoint updated', 'success');
+    } else {
+      await api('/manage/endpoints', { method: 'POST', body: raw, headers: { 'Content-Type': 'application/json' } });
+      showToast('Endpoint added', 'success');
+    }
+    endpointDialog.close();
+    loadEndpoints();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function confirmDeleteEndpoint(tag) {
+  $('#confirmMsg').textContent = 'Delete endpoint "' + tag + '"?';
+  $('#confirmOk').onclick = async () => {
+    try {
+      await api('/manage/endpoints/' + encodeURIComponent(tag), { method: 'DELETE' });
+      showToast('Endpoint deleted', 'success');
+      confirmDialog.close();
+      loadEndpoints();
     } catch (e) { showToast(e.message, 'error'); }
   };
   confirmDialog.showModal();

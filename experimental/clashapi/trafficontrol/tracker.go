@@ -35,11 +35,15 @@ func (t TrackerMetadata) MarshalJSON() ([]byte, error) {
 	} else {
 		inbound = t.Metadata.InboundType
 	}
+	destination := t.Metadata.Destination
+	if t.Metadata.OriginDestination.IsValid() {
+		destination = t.Metadata.OriginDestination
+	}
 	var domain string
 	if t.Metadata.Domain != "" {
 		domain = t.Metadata.Domain
 	} else {
-		domain = t.Metadata.Destination.Fqdn
+		domain = destination.Fqdn
 	}
 	var processPath string
 	if t.Metadata.ProcessInfo != nil {
@@ -76,9 +80,9 @@ func (t TrackerMetadata) MarshalJSON() ([]byte, error) {
 			"network":         t.Metadata.Network,
 			"type":            inbound,
 			"sourceIP":        t.Metadata.Source.Addr,
-			"destinationIP":   t.Metadata.Destination.Addr,
+			"destinationIP":   destination.Addr,
 			"sourcePort":      F.ToString(t.Metadata.Source.Port),
-			"destinationPort": F.ToString(t.Metadata.Destination.Port),
+			"destinationPort": F.ToString(destination.Port),
 			"host":            domain,
 			"dnsMode":         "normal",
 			"processPath":     processPath,

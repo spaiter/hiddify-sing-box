@@ -146,6 +146,10 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 			r.Handle("/ui/*", http.StripPrefix("/ui/", http.FileServer(Dir(s.externalUI))))
 		})
 	}
+	if s.configManager != nil {
+		chiRouter.Get("/panel", http.RedirectHandler("/panel/", http.StatusMovedPermanently).ServeHTTP)
+		chiRouter.Get("/panel/", panelHandler())
+	}
 	return s, nil
 }
 

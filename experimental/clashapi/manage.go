@@ -119,9 +119,9 @@ func getInbound(s *Server) http.HandlerFunc {
 			render.JSON(w, r, newError(err.Error()))
 			return
 		}
-		for _, inbound := range options.Inbounds {
-			if inbound.Tag == tag {
-				data, err := json.MarshalContext(s.ctx, inbound)
+		for i := range options.Inbounds {
+			if options.Inbounds[i].Tag == tag {
+				data, err := json.MarshalContext(s.ctx, &options.Inbounds[i])
 				if err != nil {
 					render.Status(r, http.StatusInternalServerError)
 					render.JSON(w, r, newError(err.Error()))
@@ -312,9 +312,9 @@ func getEndpoint(s *Server) http.HandlerFunc {
 			render.JSON(w, r, newError(err.Error()))
 			return
 		}
-		for _, endpoint := range options.Endpoints {
-			if endpoint.Tag == tag {
-				data, err := json.MarshalContext(s.ctx, endpoint)
+		for i := range options.Endpoints {
+			if options.Endpoints[i].Tag == tag {
+				data, err := json.MarshalContext(s.ctx, &options.Endpoints[i])
 				if err != nil {
 					render.Status(r, http.StatusInternalServerError)
 					render.JSON(w, r, newError(err.Error()))

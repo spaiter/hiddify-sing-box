@@ -199,6 +199,7 @@ func (e *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	var metadata adapter.InboundContext
 	metadata.Inbound = e.Tag()
 	metadata.InboundType = e.Type()
+	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
 	metadata.Destination = destination
 	for _, addr := range e.address {
@@ -221,6 +222,7 @@ func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.
 	var metadata adapter.InboundContext
 	metadata.Inbound = w.Tag()
 	metadata.InboundType = w.Type()
+	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
 	for _, addr := range w.address {
 		if addr.Contains(destination.Addr) {

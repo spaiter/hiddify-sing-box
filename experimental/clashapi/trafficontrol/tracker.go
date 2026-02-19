@@ -36,7 +36,7 @@ func (t TrackerMetadata) MarshalJSON() ([]byte, error) {
 		inbound = t.Metadata.InboundType
 	}
 	destination := t.Metadata.Destination
-	if t.Metadata.OriginDestination.IsValid() {
+	if destination.Addr.IsLoopback() && t.Metadata.OriginDestination.IsValid() {
 		destination = t.Metadata.OriginDestination
 	}
 	var domain string

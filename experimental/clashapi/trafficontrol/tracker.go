@@ -159,13 +159,20 @@ func NewTCPTracker(conn net.Conn, manager *Manager, metadata adapter.InboundCont
 	}
 	upload := new(atomic.Int64)
 	download := new(atomic.Int64)
+	user := metadata.User
 	tracker := &TCPConn{
 		ExtendedConn: bufio.NewCounterConn(conn, []N.CountFunc{func(n int64) {
 			upload.Add(n)
 			manager.PushUploaded(outbound, n)
+			if user != "" && manager.userStatsHook != nil {
+				manager.userStatsHook.PushUploaded(user, n)
+			}
 		}}, []N.CountFunc{func(n int64) {
 			download.Add(n)
 			manager.PushDownloaded(outbound, n)
+			if user != "" && manager.userStatsHook != nil {
+				manager.userStatsHook.PushDownloaded(user, n)
+			}
 		}}),
 		metadata: TrackerMetadata{
 			ID:           id,
@@ -240,13 +247,20 @@ func NewUDPTracker(conn N.PacketConn, manager *Manager, metadata adapter.Inbound
 	}
 	upload := new(atomic.Int64)
 	download := new(atomic.Int64)
+	udpUser := metadata.User
 	trackerConn := &UDPConn{
 		PacketConn: bufio.NewCounterPacketConn(conn, []N.CountFunc{func(n int64) {
 			upload.Add(n)
 			manager.PushUploaded(outbound, n)
+			if udpUser != "" && manager.userStatsHook != nil {
+				manager.userStatsHook.PushUploaded(udpUser, n)
+			}
 		}}, []N.CountFunc{func(n int64) {
 			download.Add(n)
 			manager.PushDownloaded(outbound, n)
+			if udpUser != "" && manager.userStatsHook != nil {
+				manager.userStatsHook.PushDownloaded(udpUser, n)
+			}
 		}}),
 		metadata: TrackerMetadata{
 			ID:           id,

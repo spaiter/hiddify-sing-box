@@ -307,11 +307,34 @@ test.describe('Connections Tab', () => {
   });
 });
 
+test.describe('Stats Tab', () => {
+  test('shows stats table', async ({ page }) => {
+    await login(page);
+    await page.click('nav.tabs button[data-tab="stats"]');
+    await expect(page.locator('#stats')).toHaveClass(/active/);
+
+    await expect(page.locator('#stats th', { hasText: 'User' })).toBeVisible();
+    await expect(page.locator('#stats th', { hasText: 'Upload' })).toBeVisible();
+    await expect(page.locator('#stats th', { hasText: 'Download' })).toBeVisible();
+  });
+
+  test('shows empty state or user rows', async ({ page }) => {
+    await login(page);
+    await page.click('nav.tabs button[data-tab="stats"]');
+
+    const body = page.locator('#statsBody');
+    await expect(body).toBeVisible();
+    // Either shows "No user stats yet" or actual user rows
+    const text = await body.textContent();
+    expect(text!.length).toBeGreaterThan(0);
+  });
+});
+
 test.describe('Tab Navigation', () => {
   test('all tabs are clickable and switch content', async ({ page }) => {
     await login(page);
 
-    const tabs = ['dashboard', 'config', 'inbounds', 'endpoints', 'users', 'connections'];
+    const tabs = ['dashboard', 'config', 'inbounds', 'endpoints', 'users', 'connections', 'stats'];
     for (const tab of tabs) {
       await page.click(`nav.tabs button[data-tab="${tab}"]`);
       await expect(page.locator(`#${tab}`)).toHaveClass(/active/);

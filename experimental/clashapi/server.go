@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -52,7 +53,8 @@ type Server struct {
 	urlTestHistory adapter.URLTestHistoryStorage
 	logDebug       bool
 
-	configManager *ConfigManager
+	configManager    *ConfigManager
+	userStatsManager *UserStatsManager
 
 	mode           string
 	modeList       []string
@@ -90,7 +92,16 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		s.urlTestHistory = urltest.NewHistoryStorage()
 	}
 	if options.ConfigOutputPath != "" {
-		s.configManager = NewConfigManager(ctx, filemanager.BasePath(ctx, os.ExpandEnv(options.ConfigOutputPath)))
+		configPath := filemanager.BasePath(ctx, os.ExpandEnv(options.ConfigOutputPath))
+		s.configManager = NewConfigManager(ctx, configPath)
+		dbPath := filepath.Join(filepath.Dir(configPath), "user_stats.db")
+		statsManager, err := newUserStatsManager(s.logger, dbPath)
+		if err != nil {
+			s.logger.Error("failed to initialize user stats: ", err)
+		} else {
+			s.userStatsManager = statsManager
+			trafficManager.SetUserStatsHook(statsManager)
+		}
 	}
 	defaultMode := "Rule"
 	if options.DefaultMode != "" {
@@ -138,6 +149,9 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		if s.configManager != nil {
 			r.Mount("/manage", manageRouter(s, logFactory))
 		}
+		if s.userStatsManager != nil {
+			r.Mount("/stats", statsRouter(s))
+		}
 	})
 	if options.ExternalUI != "" {
 		s.externalUI = filemanager.BasePath(ctx, os.ExpandEnv(options.ExternalUI))
@@ -160,6 +174,9 @@ func (s *Server) Name() string {
 func (s *Server) Start(stage adapter.StartStage) error {
 	switch stage {
 	case adapter.StartStateStart:
+		if s.userStatsManager != nil {
+			s.userStatsManager.Start()
+		}
 		cacheFile := service.FromContext[adapter.CacheFile](s.ctx)
 		if cacheFile != nil {
 			mode := cacheFile.LoadMode()
@@ -205,6 +222,7 @@ func (s *Server) Close() error {
 		common.PtrOrNil(s.httpServer),
 		s.trafficManager,
 		s.urlTestHistory,
+		s.userStatsManager,
 	)
 }
 

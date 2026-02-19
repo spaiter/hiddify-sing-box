@@ -35,6 +35,13 @@ type ConnectionEvent struct {
 
 const closedConnectionsLimit = 1000
 
+type UserStatsHook interface {
+	PushUploaded(user string, n int64)
+	PushDownloaded(user string, n int64)
+	ConnectionOpened(user string)
+	ConnectionClosed(user string)
+}
+
 type Manager struct {
 	uploadTotal             atomic.Int64
 	downloadTotal           atomic.Int64
@@ -46,6 +53,7 @@ type Manager struct {
 	memory                  uint64
 
 	eventSubscriber *observable.Subscriber[ConnectionEvent]
+	userStatsHook   UserStatsHook
 }
 
 func NewManager() *Manager {
@@ -56,9 +64,16 @@ func (m *Manager) SetEventHook(subscriber *observable.Subscriber[ConnectionEvent
 	m.eventSubscriber = subscriber
 }
 
+func (m *Manager) SetUserStatsHook(hook UserStatsHook) {
+	m.userStatsHook = hook
+}
+
 func (m *Manager) Join(c Tracker) {
 	metadata := c.Metadata()
 	m.connections.Store(metadata.ID, c)
+	if m.userStatsHook != nil && metadata.Metadata.User != "" {
+		m.userStatsHook.ConnectionOpened(metadata.Metadata.User)
+	}
 	if m.eventSubscriber != nil {
 		m.eventSubscriber.Emit(ConnectionEvent{
 			Type:     ConnectionEventNew,
@@ -72,6 +87,9 @@ func (m *Manager) Leave(c Tracker) {
 	metadata := c.Metadata()
 	_, loaded := m.connections.LoadAndDelete(metadata.ID)
 	if loaded {
+		if m.userStatsHook != nil && metadata.Metadata.User != "" {
+			m.userStatsHook.ConnectionClosed(metadata.Metadata.User)
+		}
 		closedAt := time.Now()
 		metadata.ClosedAt = closedAt
 		metadataCopy := *metadata
@@ -101,7 +119,7 @@ func (m *Manager) PushUploaded(outbound string, size int64) {
 func (m *Manager) PushDownloaded(outbound string, size int64) {
 	m.downloadTotal.Add(size)
 	v, _ := m.outboundDownloadTotal.LoadOrStore(outbound, &atomic.Int64{})
-	v.(*atomic.Int64).Add(100)
+	v.(*atomic.Int64).Add(size)
 }
 
 func (m *Manager) Total() (up int64, down int64) {

@@ -73,6 +73,7 @@ dialog .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
   <button data-tab="endpoints">Endpoints</button>
   <button data-tab="users">Users</button>
   <button data-tab="connections">Connections</button>
+  <button data-tab="stats">Stats</button>
 </nav>
 
 <div id="dashboard" class="tab-content active">
@@ -147,6 +148,31 @@ dialog .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
     </table>
   </div>
 </div>
+
+<div id="stats" class="tab-content">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+    <h3 style="margin:0;color:#eee">User Traffic Stats</h3>
+  </div>
+  <div class="card" style="padding:0;overflow:auto">
+    <table>
+      <thead><tr><th>User</th><th>Upload</th><th>Download</th><th>Total</th><th>Connections</th><th>Active</th><th style="width:140px">Actions</th></tr></thead>
+      <tbody id="statsBody"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<dialog id="userStatsDialog">
+  <h3 id="userStatsDialogTitle">User Details</h3>
+  <div class="card" style="padding:0;overflow:auto;max-height:50vh">
+    <table>
+      <thead><tr><th>Date</th><th>Upload</th><th>Download</th><th>Total</th><th>Connections</th></tr></thead>
+      <tbody id="userStatsDaily"></tbody>
+    </table>
+  </div>
+  <div class="actions">
+    <button class="btn btn-outline" onclick="userStatsDialog.close()">Close</button>
+  </div>
+</dialog>
 
 <dialog id="inboundDialog">
   <h3 id="inboundDialogTitle">Add Inbound</h3>
@@ -316,6 +342,7 @@ $$('nav.tabs button').forEach(btn => {
     if (tab === 'users') loadInboundSelect();
     if (tab === 'connections') startConnPolling();
     if (tab !== 'connections') stopConnPolling();
+    if (tab === 'stats') loadStats();
   });
 });
 
@@ -734,6 +761,68 @@ async function closeAllConns() {
     showToast(e.message, 'error');
   }
   loadConnections();
+}
+
+// --- Stats ---
+async function loadStats() {
+  try {
+    const stats = await api('/stats/users');
+    const body = $('#statsBody');
+    if (!stats || stats.length === 0) {
+      body.innerHTML = '<tr><td colspan="7" class="empty">No user stats yet</td></tr>';
+      return;
+    }
+    body.innerHTML = stats.map(s => `<tr>
+      <td>${escapeHtml(s.user)}</td>
+      <td>${formatBytes(s.upload||0)}</td>
+      <td>${formatBytes(s.download||0)}</td>
+      <td>${formatBytes((s.upload||0)+(s.download||0))}</td>
+      <td>${s.conn_count||0}</td>
+      <td>${s.active||0}</td>
+      <td>
+        <button class="btn btn-sm btn-outline" onclick="showUserDetail('${escapeHtml(s.user)}')">Detail</button>
+        <button class="btn btn-sm btn-danger" onclick="confirmResetUser('${escapeHtml(s.user)}')">Reset</button>
+      </td>
+    </tr>`).join('');
+  } catch (e) {
+    showToast('Failed to load stats: ' + e.message, 'error');
+  }
+}
+
+async function showUserDetail(name) {
+  $('#userStatsDialogTitle').textContent = 'Stats: ' + name;
+  try {
+    const data = await api('/stats/users/' + encodeURIComponent(name) + '?days=30');
+    const daily = data.daily || [];
+    const body = $('#userStatsDaily');
+    if (daily.length === 0) {
+      body.innerHTML = '<tr><td colspan="5" class="empty">No daily data</td></tr>';
+    } else {
+      body.innerHTML = daily.map(d => `<tr>
+        <td>${escapeHtml(d.date)}</td>
+        <td>${formatBytes(d.upload||0)}</td>
+        <td>${formatBytes(d.download||0)}</td>
+        <td>${formatBytes((d.upload||0)+(d.download||0))}</td>
+        <td>${d.conn_count||0}</td>
+      </tr>`).join('');
+    }
+    userStatsDialog.showModal();
+  } catch (e) {
+    showToast('Failed to load user detail: ' + e.message, 'error');
+  }
+}
+
+function confirmResetUser(name) {
+  $('#confirmMsg').textContent = 'Reset all stats for "' + name + '"?';
+  $('#confirmOk').onclick = async () => {
+    try {
+      await api('/stats/users/' + encodeURIComponent(name), { method: 'DELETE' });
+      showToast('Stats reset for ' + name, 'success');
+      confirmDialog.close();
+      loadStats();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+  confirmDialog.showModal();
 }
 
 // --- Init ---

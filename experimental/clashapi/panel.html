@@ -163,10 +163,18 @@ dialog .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
 
 <dialog id="userStatsDialog">
   <h3 id="userStatsDialogTitle">User Details</h3>
-  <div class="card" style="padding:0;overflow:auto;max-height:50vh">
+  <h4 style="margin:0 0 .5rem;color:#8899aa;font-size:.85rem">Daily Breakdown</h4>
+  <div class="card" style="padding:0;overflow:auto;max-height:30vh">
     <table>
       <thead><tr><th>Date</th><th>Upload</th><th>Download</th><th>Total</th><th>Connections</th></tr></thead>
       <tbody id="userStatsDaily"></tbody>
+    </table>
+  </div>
+  <h4 style="margin:1rem 0 .5rem;color:#8899aa;font-size:.85rem">Top Resources</h4>
+  <div class="card" style="padding:0;overflow:auto;max-height:30vh">
+    <table>
+      <thead><tr><th>Resource</th><th>Upload</th><th>Download</th><th>Total</th><th>Connections</th></tr></thead>
+      <tbody id="userStatsResources"></tbody>
     </table>
   </div>
   <div class="actions">
@@ -792,7 +800,10 @@ async function loadStats() {
 async function showUserDetail(name) {
   $('#userStatsDialogTitle').textContent = 'Stats: ' + name;
   try {
-    const data = await api('/stats/users/' + encodeURIComponent(name) + '?days=30');
+    const [data, resources] = await Promise.all([
+      api('/stats/users/' + encodeURIComponent(name) + '?days=30'),
+      api('/stats/users/' + encodeURIComponent(name) + '/resources?days=30')
+    ]);
     const daily = data.daily || [];
     const body = $('#userStatsDaily');
     if (daily.length === 0) {
@@ -804,6 +815,19 @@ async function showUserDetail(name) {
         <td>${formatBytes(d.download||0)}</td>
         <td>${formatBytes((d.upload||0)+(d.download||0))}</td>
         <td>${d.conn_count||0}</td>
+      </tr>`).join('');
+    }
+    const resList = resources || [];
+    const resBody = $('#userStatsResources');
+    if (resList.length === 0) {
+      resBody.innerHTML = '<tr><td colspan="5" class="empty">No resource data</td></tr>';
+    } else {
+      resBody.innerHTML = resList.map(r => `<tr>
+        <td>${escapeHtml(r.resource)}</td>
+        <td>${formatBytes(r.upload||0)}</td>
+        <td>${formatBytes(r.download||0)}</td>
+        <td>${formatBytes((r.upload||0)+(r.download||0))}</td>
+        <td>${r.conn_count||0}</td>
       </tr>`).join('');
     }
     userStatsDialog.showModal();

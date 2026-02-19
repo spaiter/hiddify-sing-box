@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/compatible"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing/common"
@@ -36,10 +37,24 @@ type ConnectionEvent struct {
 const closedConnectionsLimit = 1000
 
 type UserStatsHook interface {
-	PushUploaded(user string, n int64)
-	PushDownloaded(user string, n int64)
-	ConnectionOpened(user string)
+	PushUploaded(user string, resource string, n int64)
+	PushDownloaded(user string, resource string, n int64)
+	ConnectionOpened(user string, resource string)
 	ConnectionClosed(user string)
+}
+
+func ExtractResource(metadata adapter.InboundContext) string {
+	if metadata.Domain != "" {
+		return metadata.Domain
+	}
+	destination := metadata.Destination
+	if destination.Addr.IsLoopback() && metadata.OriginDestination.IsValid() {
+		destination = metadata.OriginDestination
+	}
+	if destination.Addr.IsValid() {
+		return destination.Addr.String()
+	}
+	return ""
 }
 
 type Manager struct {
@@ -72,7 +87,7 @@ func (m *Manager) Join(c Tracker) {
 	metadata := c.Metadata()
 	m.connections.Store(metadata.ID, c)
 	if m.userStatsHook != nil && metadata.Metadata.User != "" {
-		m.userStatsHook.ConnectionOpened(metadata.Metadata.User)
+		m.userStatsHook.ConnectionOpened(metadata.Metadata.User, ExtractResource(metadata.Metadata))
 	}
 	if m.eventSubscriber != nil {
 		m.eventSubscriber.Emit(ConnectionEvent{

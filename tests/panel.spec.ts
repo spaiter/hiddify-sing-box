@@ -328,6 +328,43 @@ test.describe('Stats Tab', () => {
     const text = await body.textContent();
     expect(text!.length).toBeGreaterThan(0);
   });
+
+  test('detail dialog shows daily breakdown and resources tables', async ({ page }) => {
+    await login(page);
+    await page.click('nav.tabs button[data-tab="stats"]');
+
+    // Mock the APIs so the dialog can open even without real data
+    await page.evaluate(() => {
+      const origFetch = window.fetch;
+      (window as any)._origFetch = origFetch;
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/stats/users/') && url.includes('/resources')) {
+          return new Response(JSON.stringify([]), { headers: { 'content-type': 'application/json' } });
+        }
+        if (url.includes('/stats/users/') && !url.includes('/resources')) {
+          return new Response(JSON.stringify({ user: 'test', daily: [] }), { headers: { 'content-type': 'application/json' } });
+        }
+        return origFetch(input, init);
+      };
+    });
+
+    // Call showUserDetail directly
+    await page.evaluate(() => (window as any).showUserDetail('test'));
+
+    const dialog = page.locator('#userStatsDialog');
+    await expect(dialog).toBeVisible();
+
+    // Verify daily breakdown table headers exist
+    await expect(dialog.locator('th', { hasText: 'Date' })).toBeVisible();
+
+    // Verify resources table headers exist
+    await expect(dialog.locator('th', { hasText: 'Resource' })).toBeVisible();
+    await expect(dialog.locator('#userStatsResources')).toBeVisible();
+
+    // Restore fetch
+    await page.evaluate(() => { window.fetch = (window as any)._origFetch; });
+  });
 });
 
 test.describe('Tab Navigation', () => {

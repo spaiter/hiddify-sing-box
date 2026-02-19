@@ -3,6 +3,7 @@ package clashapi
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,13 +20,14 @@ type userAccumulator struct {
 }
 
 type UserStatsManager struct {
-	db           *sql.DB
-	logger       log.Logger
-	accumulators sync.Map // string -> *userAccumulator
-	activeConns  sync.Map // string -> *atomic.Int64
-	ctx          context.Context
-	cancel       context.CancelFunc
-	done         chan struct{}
+	db                   *sql.DB
+	logger               log.Logger
+	accumulators         sync.Map // string -> *userAccumulator
+	resourceAccumulators sync.Map // "user\x00resource" -> *userAccumulator
+	activeConns          sync.Map // string -> *atomic.Int64
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	done                 chan struct{}
 }
 
 func newUserStatsManager(logger log.Logger, dbPath string) (*UserStatsManager, error) {
@@ -40,6 +42,19 @@ func newUserStatsManager(logger log.Logger, dbPath string) (*UserStatsManager, e
 		download   INTEGER NOT NULL DEFAULT 0,
 		conn_count INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (user, date)
+	)`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS user_resources_daily (
+		user       TEXT    NOT NULL,
+		date       TEXT    NOT NULL,
+		resource   TEXT    NOT NULL,
+		upload     INTEGER NOT NULL DEFAULT 0,
+		download   INTEGER NOT NULL DEFAULT 0,
+		conn_count INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (user, date, resource)
 	)`)
 	if err != nil {
 		db.Close()
@@ -85,18 +100,44 @@ func (m *UserStatsManager) getAccumulator(user string) *userAccumulator {
 	return v.(*userAccumulator)
 }
 
-func (m *UserStatsManager) PushUploaded(user string, n int64) {
+func resourceKey(user, resource string) string {
+	return user + "\x00" + resource
+}
+
+func parseResourceKey(key string) (user, resource string) {
+	i := strings.IndexByte(key, 0)
+	if i < 0 {
+		return key, ""
+	}
+	return key[:i], key[i+1:]
+}
+
+func (m *UserStatsManager) getResourceAccumulator(user, resource string) *userAccumulator {
+	v, _ := m.resourceAccumulators.LoadOrStore(resourceKey(user, resource), &userAccumulator{})
+	return v.(*userAccumulator)
+}
+
+func (m *UserStatsManager) PushUploaded(user string, resource string, n int64) {
 	m.getAccumulator(user).upload.Add(n)
+	if resource != "" {
+		m.getResourceAccumulator(user, resource).upload.Add(n)
+	}
 }
 
-func (m *UserStatsManager) PushDownloaded(user string, n int64) {
+func (m *UserStatsManager) PushDownloaded(user string, resource string, n int64) {
 	m.getAccumulator(user).download.Add(n)
+	if resource != "" {
+		m.getResourceAccumulator(user, resource).download.Add(n)
+	}
 }
 
-func (m *UserStatsManager) ConnectionOpened(user string) {
+func (m *UserStatsManager) ConnectionOpened(user string, resource string) {
 	m.getAccumulator(user).connCount.Add(1)
 	v, _ := m.activeConns.LoadOrStore(user, &atomic.Int64{})
 	v.(*atomic.Int64).Add(1)
+	if resource != "" {
+		m.getResourceAccumulator(user, resource).connCount.Add(1)
+	}
 }
 
 func (m *UserStatsManager) ConnectionClosed(user string) {
@@ -142,6 +183,36 @@ func (m *UserStatsManager) flush() {
 		return true
 	})
 
+	resStmt, err := tx.Prepare(`INSERT INTO user_resources_daily (user, date, resource, upload, download, conn_count)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user, date, resource) DO UPDATE SET
+			upload = upload + excluded.upload,
+			download = download + excluded.download,
+			conn_count = conn_count + excluded.conn_count`)
+	if err != nil {
+		m.logger.Error("user resource stats flush prepare: ", err)
+		tx.Commit()
+		return
+	}
+	defer resStmt.Close()
+
+	m.resourceAccumulators.Range(func(key, value any) bool {
+		compositeKey := key.(string)
+		acc := value.(*userAccumulator)
+		up := acc.upload.Swap(0)
+		down := acc.download.Swap(0)
+		conns := acc.connCount.Swap(0)
+		if up == 0 && down == 0 && conns == 0 {
+			return true
+		}
+		user, resource := parseResourceKey(compositeKey)
+		_, err := resStmt.Exec(user, today, resource, up, down, conns)
+		if err != nil {
+			m.logger.Error("user resource stats flush exec for ", user, "/", resource, ": ", err)
+		}
+		return true
+	})
+
 	if err := tx.Commit(); err != nil {
 		m.logger.Error("user stats flush commit: ", err)
 	}
@@ -157,6 +228,13 @@ type UserStatsSummary struct {
 
 type UserDailyStats struct {
 	Date      string `json:"date"`
+	Upload    int64  `json:"upload"`
+	Download  int64  `json:"download"`
+	ConnCount int64  `json:"conn_count"`
+}
+
+type UserResourceStats struct {
+	Resource  string `json:"resource"`
 	Upload    int64  `json:"upload"`
 	Download  int64  `json:"download"`
 	ConnCount int64  `json:"conn_count"`
@@ -253,8 +331,68 @@ func (m *UserStatsManager) GetUserDaily(user string, days int) ([]UserDailyStats
 	return result, nil
 }
 
+func (m *UserStatsManager) GetUserResources(user string, days int) ([]UserResourceStats, error) {
+	rows, err := m.db.Query(`SELECT resource, SUM(upload), SUM(download), SUM(conn_count)
+		FROM user_resources_daily
+		WHERE user = ? AND date >= date('now', '-' || ? || ' days')
+		GROUP BY resource
+		ORDER BY SUM(upload) + SUM(download) DESC`, user, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	statsMap := make(map[string]*UserResourceStats)
+	var order []string
+	for rows.Next() {
+		var s UserResourceStats
+		if err := rows.Scan(&s.Resource, &s.Upload, &s.Download, &s.ConnCount); err != nil {
+			return nil, err
+		}
+		statsMap[s.Resource] = &s
+		order = append(order, s.Resource)
+	}
+
+	// Add unflushed in-memory deltas for this user
+	prefix := user + "\x00"
+	m.resourceAccumulators.Range(func(key, value any) bool {
+		compositeKey := key.(string)
+		if !strings.HasPrefix(compositeKey, prefix) {
+			return true
+		}
+		_, resource := parseResourceKey(compositeKey)
+		acc := value.(*userAccumulator)
+		up := acc.upload.Load()
+		down := acc.download.Load()
+		conns := acc.connCount.Load()
+		if up == 0 && down == 0 && conns == 0 {
+			return true
+		}
+		s, ok := statsMap[resource]
+		if !ok {
+			s = &UserResourceStats{Resource: resource}
+			statsMap[resource] = s
+			order = append(order, resource)
+		}
+		s.Upload += up
+		s.Download += down
+		s.ConnCount += conns
+		return true
+	})
+
+	result := make([]UserResourceStats, 0, len(order))
+	for _, res := range order {
+		result = append(result, *statsMap[res])
+	}
+	return result, nil
+}
+
 func (m *UserStatsManager) ResetUser(user string) error {
 	_, err := m.db.Exec(`DELETE FROM user_stats_daily WHERE user = ?`, user)
+	if err != nil {
+		return err
+	}
+	_, err = m.db.Exec(`DELETE FROM user_resources_daily WHERE user = ?`, user)
 	if err != nil {
 		return err
 	}
@@ -264,6 +402,13 @@ func (m *UserStatsManager) ResetUser(user string) error {
 		a.download.Store(0)
 		a.connCount.Store(0)
 	}
+	prefix := user + "\x00"
+	m.resourceAccumulators.Range(func(key, value any) bool {
+		if strings.HasPrefix(key.(string), prefix) {
+			m.resourceAccumulators.Delete(key)
+		}
+		return true
+	})
 	return nil
 }
 
@@ -272,8 +417,16 @@ func (m *UserStatsManager) ResetAll() error {
 	if err != nil {
 		return err
 	}
+	_, err = m.db.Exec(`DELETE FROM user_resources_daily`)
+	if err != nil {
+		return err
+	}
 	m.accumulators.Range(func(key, value any) bool {
 		m.accumulators.Delete(key)
+		return true
+	})
+	m.resourceAccumulators.Range(func(key, value any) bool {
+		m.resourceAccumulators.Delete(key)
 		return true
 	})
 	return nil

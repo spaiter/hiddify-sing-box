@@ -1,40 +1,44 @@
 package constant
 
 const (
-	TypeTun          = "tun"
-	TypeRedirect     = "redirect"
-	TypeTProxy       = "tproxy"
-	TypeDirect       = "direct"
-	TypeBlock        = "block"
-	TypeDNS          = "dns"
-	TypeSOCKS        = "socks"
-	TypeHTTP         = "http"
-	TypeMixed        = "mixed"
-	TypeShadowsocks  = "shadowsocks"
-	TypeVMess        = "vmess"
-	TypeTrojan       = "trojan"
-	TypeNaive        = "naive"
-	TypeWireGuard    = "wireguard"
-	TypeWARP         = "warp"
-	TypeHysteria     = "hysteria"
-	TypeTor          = "tor"
-	TypeSSH          = "ssh"
-	TypeShadowTLS    = "shadowtls"
-	TypeMieru        = "mieru"
-	TypeAnyTLS       = "anytls"
-	TypeShadowsocksR = "shadowsocksr"
-	TypeVLESS        = "vless"
-	TypeTUIC         = "tuic"
-	TypeHysteria2    = "hysteria2"
-	TypePsiphon      = "psiphon"
-	TypeTunnelClient = "tunnel_client"
-	TypeTunnelServer = "tunnel_server"
-	TypeTailscale    = "tailscale"
-	TypeDERP         = "derp"
-	TypeResolved     = "resolved"
-	TypeSSMAPI       = "ssm-api"
-	TypeCCM          = "ccm"
-	TypeOCM          = "ocm"
+	TypeTun                = "tun"
+	TypeRedirect           = "redirect"
+	TypeTProxy             = "tproxy"
+	TypeDirect             = "direct"
+	TypeBlock              = "block"
+	TypeDNS                = "dns"
+	TypeSOCKS              = "socks"
+	TypeHTTP               = "http"
+	TypeMixed              = "mixed"
+	TypeShadowsocks        = "shadowsocks"
+	TypeVMess              = "vmess"
+	TypeTrojan             = "trojan"
+	TypeNaive              = "naive"
+	TypeWireGuard          = "wireguard"
+	TypeWARP               = "warp"
+	TypeHysteria           = "hysteria"
+	TypeTor                = "tor"
+	TypeSSH                = "ssh"
+	TypeShadowTLS          = "shadowtls"
+	TypeMieru              = "mieru"
+	TypeAnyTLS             = "anytls"
+	TypeShadowsocksR       = "shadowsocksr"
+	TypeVLESS              = "vless"
+	TypeTUIC               = "tuic"
+	TypeHysteria2          = "hysteria2"
+	TypePsiphon            = "psiphon"
+	TypeTunnelClient       = "tunnel_client"
+	TypeTunnelServer       = "tunnel_server"
+	TypeTailscale          = "tailscale"
+	TypeCloudflared        = "cloudflared"
+	TypeDERP               = "derp"
+	TypeResolved           = "resolved"
+	TypeSSMAPI             = "ssm-api"
+	TypeCCM                = "ccm"
+	TypeOCM                = "ocm"
+	TypeOOMKiller          = "oom-killer"
+	TypeACME               = "acme"
+	TypeCloudflareOriginCA = "cloudflare-origin-ca"
 
 	TypeHInvalidConfig = "hinvalid" //H
 	TypeXray           = "xray"     //H
@@ -42,6 +46,9 @@ const (
 	TypeAwg            = "awg"      //H
 	TypeBalancer       = "balancer" //H
 	TypeXDPBlocker     = "xdp-blocker"
+	TypeDNSTT          = "dnstt"         //H
+	TypeGooseRelay     = "gooserelay"    //H
+	TypeSmartDNSPool   = "smart_dns_pool" //H
 )
 
 const (
@@ -103,6 +110,10 @@ func ProxyDisplayName(proxyType string) string {
 		return "AnyTLS"
 	case TypePsiphon:
 		return "Psiphon"
+	case TypeTailscale:
+		return "Tailscale"
+	case TypeCloudflared:
+		return "Cloudflared"
 	case TypeSelector:
 		return "Selector"
 	case TypeURLTest:
@@ -121,6 +132,10 @@ func ProxyDisplayName(proxyType string) string {
 		return "Awg"
 	case TypeBalancer:
 		return "Balancer"
+	case TypeDNSTT:
+		return "DNSTT"
+	case TypeGooseRelay:
+		return "GooseRelay"
 	default:
 		return "Unknown"
 	}

@@ -5,7 +5,12 @@ COPY go.mod go.sum ./
 COPY replace/ replace/
 RUN go mod download
 COPY . .
-RUN apk add --no-cache git build-base && make build VERSION="${VERSION}" TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,badlinkname,tfogo_checklinkname0,with_grpc,with_awg,with_xdp"
+RUN apk add --no-cache git build-base && \
+    TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,badlinkname,tfogo_checklinkname0,with_grpc,with_awg,with_xdp" && \
+    go build -v -trimpath \
+        -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' -X internal/godebug.defaultGODEBUG=multipathtcp=0 -checklinkname=0 -s -w -buildid=" \
+        -tags "${TAGS}" \
+        -o sing-box ./cmd/sing-box
 
 FROM alpine
 RUN apk add --no-cache bash tzdata ca-certificates nftables

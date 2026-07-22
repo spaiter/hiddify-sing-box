@@ -69,6 +69,7 @@ const (
 	TypeSoar           = "soar"       //H
 	TypeTrustTunnel    = "trusttunnel"
 	TypeXDPBlocker     = "xdp-blocker" //H
+	TypeMTProto        = "mtproto"     //H: Telegram MTProto proxy (github.com/9seconds/mtg)
 )
 
 const (

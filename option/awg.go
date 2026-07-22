@@ -1,12 +1,14 @@
 package option
 
 import (
+	"context"
 	"net/netip"
 
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
-type AwgEndpointOptions struct {
+type _AwgEndpointOptions struct {
 	UseIntegratedTun bool                             `json:"useIntegratedTun"`
 	PrivateKey       string                           `json:"private_key"`
 	Address          badoption.Listable[netip.Prefix] `json:"address"`
@@ -15,6 +17,26 @@ type AwgEndpointOptions struct {
 	Awg              AwgOptions                       `json:"awg,omitempty"`
 	Peers            []AwgPeerOptions                 `json:"peers,omitempty"`
 	DialerOptions
+}
+
+type AwgEndpointOptions _AwgEndpointOptions
+
+// UnmarshalJSONContext accepts the nested `awg` object and, for backward
+// compatibility with configs written before the schema was nested, also folds
+// legacy top-level AmneziaWG obfuscation params (jc/jmin/jmax/s1..s4/h1..h4/i1..i5)
+// into the `awg` object. //H flat->nested migration
+func (o *AwgEndpointOptions) UnmarshalJSONContext(ctx context.Context, content []byte) error {
+	err := json.UnmarshalContext(ctx, content, (*_AwgEndpointOptions)(o))
+	if err != nil {
+		return err
+	}
+	if !o.Awg.IsAvailble() {
+		var legacy AwgOptions
+		if json.UnmarshalContext(ctx, content, &legacy) == nil && legacy.IsAvailble() {
+			o.Awg = legacy
+		}
+	}
+	return nil
 }
 
 type AwgOptions struct {

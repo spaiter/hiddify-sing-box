@@ -14,6 +14,11 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
+func setBitTorrentProtocol(metadata *adapter.InboundContext, detector string) {
+	metadata.Protocol = C.ProtocolBitTorrent
+	metadata.SniffDetector = detector
+}
+
 // BitTorrent detects if the stream is a BitTorrent connection.
 // For the BitTorrent protocol specification, see https://www.bittorrent.org/beps/bep_0003.html
 func BitTorrent(_ context.Context, metadata *adapter.InboundContext, reader io.Reader) error {
@@ -41,7 +46,7 @@ func BitTorrent(_ context.Context, metadata *adapter.InboundContext, reader io.R
 		return ErrNeedMoreData
 	}
 
-	metadata.Protocol = C.ProtocolBitTorrent
+	setBitTorrentProtocol(metadata, "handshake")
 	return nil
 }
 
@@ -168,7 +173,7 @@ func UTP(_ context.Context, metadata *adapter.InboundContext, packet []byte) err
 		}
 	}
 
-	metadata.Protocol = C.ProtocolBitTorrent
+	setBitTorrentProtocol(metadata, "utp")
 	return nil
 }
 
@@ -230,7 +235,7 @@ func UDPTracker(_ context.Context, metadata *adapter.InboundContext, packet []by
 	if len(packet) >= minSizeConnect && len(packet) < minSizeScrape {
 		if binary.BigEndian.Uint64(packet[:8]) == trackerProtocolID &&
 			binary.BigEndian.Uint32(packet[8:12]) == actionConnect {
-			metadata.Protocol = C.ProtocolBitTorrent
+			setBitTorrentProtocol(metadata, "udp-tracker-connect")
 			return nil
 		}
 	}
@@ -251,7 +256,7 @@ func UDPTracker(_ context.Context, metadata *adapter.InboundContext, packet []by
 			peerID := packet[36:40]
 			for _, prefix := range peerIDPrefixes {
 				if bytes.HasPrefix(peerID, prefix) {
-					metadata.Protocol = C.ProtocolBitTorrent
+					setBitTorrentProtocol(metadata, "udp-tracker-announce-peer-id")
 					return nil
 				}
 			}
@@ -280,7 +285,7 @@ func UDPTracker(_ context.Context, metadata *adapter.InboundContext, packet []by
 				return os.ErrInvalid
 			}
 
-			metadata.Protocol = C.ProtocolBitTorrent
+			setBitTorrentProtocol(metadata, "udp-tracker-announce")
 			return nil
 		}
 	}
@@ -296,7 +301,7 @@ func UDPTracker(_ context.Context, metadata *adapter.InboundContext, packet []by
 			if countTrailingZeroBytes(packet[:8]) > 3 {
 				return os.ErrInvalid
 			}
-			metadata.Protocol = C.ProtocolBitTorrent
+			setBitTorrentProtocol(metadata, "udp-tracker-scrape")
 			return nil
 		}
 	}
@@ -307,7 +312,7 @@ func UDPTracker(_ context.Context, metadata *adapter.InboundContext, packet []by
 // BitTorrentDHTPacket detects BitTorrent DHT packets (bencode dictionary + node validation).
 func BitTorrentDHTPacket(_ context.Context, metadata *adapter.InboundContext, packet []byte) error {
 	if checkBencodeDHT(packet) {
-		metadata.Protocol = C.ProtocolBitTorrent
+		setBitTorrentProtocol(metadata, "dht")
 		return nil
 	}
 	return os.ErrInvalid
@@ -319,28 +324,28 @@ func BitTorrentLSD(_ context.Context, metadata *adapter.InboundContext, packet [
 	if metadata.Destination.Port == 6771 && metadata.Destination.Addr.IsValid() {
 		dest := metadata.Destination.Addr
 		if dest == netip.AddrFrom4([4]byte{239, 192, 152, 143}) {
-			metadata.Protocol = C.ProtocolBitTorrent
+			setBitTorrentProtocol(metadata, "lsd-ipv4-multicast")
 			return nil
 		}
 		lsdIPv6, _ := netip.AddrFromSlice([]byte{0xff, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xef, 0xc0, 0x98, 0x8f})
 		if dest == lsdIPv6 {
-			metadata.Protocol = C.ProtocolBitTorrent
+			setBitTorrentProtocol(metadata, "lsd-ipv6-multicast")
 			return nil
 		}
 	}
 
 	// Check payload for LSD message patterns
 	if bytes.Contains(packet, []byte("BT-SEARCH * HTTP/1.1")) {
-		metadata.Protocol = C.ProtocolBitTorrent
+		setBitTorrentProtocol(metadata, "lsd-bt-search")
 		return nil
 	}
 	if bytes.Contains(packet, []byte("Host: 239.192.152.143:6771")) {
-		metadata.Protocol = C.ProtocolBitTorrent
+		setBitTorrentProtocol(metadata, "lsd-host")
 		return nil
 	}
 	if bytes.Contains(packet, []byte("Infohash: ")) &&
 		bytes.Contains(packet, []byte("Port: ")) {
-		metadata.Protocol = C.ProtocolBitTorrent
+		setBitTorrentProtocol(metadata, "lsd-infohash-port")
 		return nil
 	}
 
@@ -350,7 +355,7 @@ func BitTorrentLSD(_ context.Context, metadata *adapter.InboundContext, packet [
 // BitTorrentSignaturePacket detects BitTorrent UDP packets by signature matching.
 func BitTorrentSignaturePacket(_ context.Context, metadata *adapter.InboundContext, packet []byte) error {
 	if checkSignatures(packet) {
-		metadata.Protocol = C.ProtocolBitTorrent
+		setBitTorrentProtocol(metadata, "signature-packet")
 		return nil
 	}
 	return os.ErrInvalid
@@ -420,7 +425,7 @@ func BitTorrentMSE(_ context.Context, metadata *adapter.InboundContext, reader i
 	}
 	cryptoBytes := binary.BigEndian.Uint32(payload[vcPosition+8 : vcPosition+12])
 	if cryptoBytes > 0 && cryptoBytes <= 0x03 {
-		metadata.Protocol = C.ProtocolBitTorrent
+		setBitTorrentProtocol(metadata, "mse")
 		return nil
 	}
 
@@ -447,7 +452,7 @@ func BitTorrentMessage(_ context.Context, metadata *adapter.InboundContext, read
 		return os.ErrInvalid
 	}
 
-	metadata.Protocol = C.ProtocolBitTorrent
+	setBitTorrentProtocol(metadata, "message")
 	return nil
 }
 
@@ -463,7 +468,7 @@ func BitTorrentFAST(_ context.Context, metadata *adapter.InboundContext, reader 
 		return os.ErrInvalid
 	}
 
-	metadata.Protocol = C.ProtocolBitTorrent
+	setBitTorrentProtocol(metadata, "fast")
 	return nil
 }
 
@@ -479,7 +484,7 @@ func BitTorrentExtended(_ context.Context, metadata *adapter.InboundContext, rea
 		return os.ErrInvalid
 	}
 
-	metadata.Protocol = C.ProtocolBitTorrent
+	setBitTorrentProtocol(metadata, "extended")
 	return nil
 }
 
@@ -495,7 +500,7 @@ func BitTorrentHTTP(_ context.Context, metadata *adapter.InboundContext, reader 
 		return os.ErrInvalid
 	}
 
-	metadata.Protocol = C.ProtocolBitTorrent
+	setBitTorrentProtocol(metadata, "http")
 	return nil
 }
 
@@ -511,7 +516,7 @@ func BitTorrentSignature(_ context.Context, metadata *adapter.InboundContext, re
 		return os.ErrInvalid
 	}
 
-	metadata.Protocol = C.ProtocolBitTorrent
+	setBitTorrentProtocol(metadata, "signature-stream")
 	return nil
 }
 
@@ -682,10 +687,19 @@ func checkExtendedMessage(payload []byte) bool {
 	if len(payload) < 7 {
 		return false
 	}
+	// Validate message length (bytes 0-3): must be plausible for a BT message.
+	// Encrypted traffic (e.g. Telegram MTProto) can have 0x14 at byte 4 by chance,
+	// but the preceding 4-byte length will almost never fall in the valid BT range.
+	msgLen := binary.BigEndian.Uint32(payload[0:4])
+	if msgLen < 2 || msgLen > 131072 {
+		return false
+	}
 	// Message ID 20 (0x14) at offset 4
 	if payload[4] == 0x14 {
-		if len(payload) > 6 && payload[6] == 'd' {
-			return true
+		extID := payload[5]
+		if extID == 0 {
+			// Extended handshake must begin with a bencode dictionary
+			return len(payload) > 6 && payload[6] == 'd'
 		}
 		return true
 	}

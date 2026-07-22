@@ -406,7 +406,7 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) a
 			}
 			return r.preMatchFlow(ctx, &metadata, packetDestination, currentRule, action.Outbound)
 		case *R.RuleActionReject:
-			r.xdpBlockIfBitTorrent(action, *metadata)
+			r.xdpBlockIfBitTorrent(action, metadata)
 			rejectErr := action.Error(r.ctx)
 			if errors.Is(rejectErr, R.ErrDrop) {
 				return adapter.PreMatchResult{Action: adapter.PreMatchDrop}

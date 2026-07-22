@@ -7,11 +7,13 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 
 	"github.com/sagernet/sing-box/adapter"
+	singTun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/exceptions"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
@@ -36,6 +38,10 @@ type DeviceOpts struct {
 	ListenPort uint16 //H
 	// PeerPending: the only peer is given by a domain, resolved after the start (SetPeerEndpoint). //H
 	PeerPending bool //H
+	// Handler, when set, routes the peers' flows through sing-box (server mode): see device_stack.go.
+	Handler    singTun.Handler
+	UDPTimeout time.Duration
+	Context    context.Context
 }
 
 type Device struct {
@@ -57,6 +63,11 @@ func NewDevice(ctx context.Context, logger logger.ContextLogger, dial network.Di
 		tun, err = newSystemTun(ctx, opts.Address, opts.AllowedIps, opts.ExcludedIps, opts.MTU, logger)
 		if err != nil {
 			return nil, exceptions.Cause(err, "create tunnel")
+		}
+	} else if opts.Handler != nil {
+		tun, err = newStackTun(ctx, opts.Address, opts.MTU, opts.Handler, opts.UDPTimeout)
+		if err != nil {
+			return nil, exceptions.Cause(err, "create stack tunnel")
 		}
 	} else {
 		tun, err = newNetworkTun(opts.Address, opts.MTU)

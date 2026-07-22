@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -59,6 +60,9 @@ type Server struct {
 	logDebug       bool
 	cleaner        *cleanup.Cleaner
 
+	configManager    *ConfigManager
+	userStatsManager *UserStatsManager
+
 	externalController       bool
 	externalUI               string
 	externalUIDownloadURL    string
@@ -99,6 +103,18 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 	if s.urlTestHistory == nil {
 		s.urlTestHistory = urltest.NewHistoryStorage()
 	}
+	if options.ConfigOutputPath != "" {
+		configPath := filemanager.BasePath(ctx, os.ExpandEnv(options.ConfigOutputPath))
+		s.configManager = NewConfigManager(ctx, configPath)
+		dbPath := filepath.Join(filepath.Dir(configPath), "user_stats.db")
+		statsManager, err := newUserStatsManager(s.logger, dbPath)
+		if err != nil {
+			s.logger.Error("failed to initialize user stats: ", err)
+		} else {
+			s.userStatsManager = statsManager
+			trafficManager.SetUserStatsHook(statsManager)
+		}
+	}
 	//goland:noinspection GoDeprecation
 	//nolint:staticcheck
 	if options.StoreMode || options.StoreSelected || options.StoreFakeIP || options.CacheFile != "" || options.CacheID != "" {
@@ -134,6 +150,12 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		r.Mount("/dns", dnsRouter(s.dnsRouter))
 
 		s.setupMetaAPI(r)
+		if s.configManager != nil {
+			r.Mount("/manage", manageRouter(s, logFactory))
+		}
+		if s.userStatsManager != nil {
+			r.Mount("/stats", statsRouter(s))
+		}
 	})
 	if options.ExternalUI != "" {
 		s.externalUI = filemanager.BasePath(ctx, os.ExpandEnv(options.ExternalUI))
@@ -146,6 +168,10 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 			r.Handle("/ui/*", http.StripPrefix("/ui/", http.FileServer(Dir(s.externalUI))))
 		})
 	}
+	if s.configManager != nil {
+		chiRouter.Get("/panel", http.RedirectHandler("/panel/", http.StatusMovedPermanently).ServeHTTP)
+		chiRouter.Get("/panel/", panelHandler())
+	}
 	return s, nil
 }
 
@@ -157,8 +183,11 @@ func (s *Server) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if stage == adapter.StartStateInitialize {
 		// H: the hiddify clash server owns its traffic manager and URL test history
 		scope.Add(func() error {
-			return common.Close(s.trafficManager, s.urlTestHistory, common.PtrOrNil(s.cleaner))
+			return common.Close(s.trafficManager, s.urlTestHistory, common.PtrOrNil(s.cleaner), s.userStatsManager)
 		})
+	}
+	if stage == adapter.StartStateStart && s.userStatsManager != nil {
+		s.userStatsManager.Start()
 	}
 	if stage != adapter.StartStateStarted {
 		return nil

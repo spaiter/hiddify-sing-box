@@ -19,6 +19,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/transport/awg"
+	singTun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -116,6 +117,20 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 
 	logger.Debug("AWG IPC config:\n", ipc)
 
+	peerUsers := peeruser.New(common.Map(options.Peers, func(it option.AwgPeerOptions) peeruser.Peer {
+		return peeruser.Peer{User: it.Username, AllowedIPs: it.AllowedIPs}
+	}))
+	ep := &Endpoint{
+		Adapter:   endpoint.NewAdapterWithDialerOptions("awg", tag, []string{N.NetworkTCP, N.NetworkUDP}, options.DialerOptions),
+		address:   options.Address,
+		peerUsers: peerUsers,
+		router:    router,
+		logger:    logger,
+		dnsRouter: service.FromContext[adapter.DNSRouter](ctx),
+		ctx:       ctx,
+		peers:     newDomainPeers(dial, domainPeers, len(options.Peers)), //H
+	}
+
 	dev, err := awg.NewDevice(ctx, logger, dial, ipc, awg.DeviceOpts{
 		UseIntegratedTun: options.UseIntegratedTun,
 		Address:          options.Address,
@@ -128,25 +143,15 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		Fallback:         fallback,                                             //H
 		ListenPort:       options.ListenPort,                                   //H
 		PeerPending:      len(options.Peers) == 1 && len(domainPeers) == 1,     //H: see h_domain_peer.go
+		Handler:          ep,                                                   // peers' flows go through the router: sniffing, per-user stats, XDP
+		UDPTimeout:       constant.UDPTimeout,
+		Context:          ctx,
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	peerUsers := peeruser.New(common.Map(options.Peers, func(it option.AwgPeerOptions) peeruser.Peer {
-		return peeruser.Peer{User: it.Username, AllowedIPs: it.AllowedIPs}
-	}))
-	return &Endpoint{
-		Device:    dev,
-		Adapter:   endpoint.NewAdapterWithDialerOptions("awg", tag, []string{N.NetworkTCP, N.NetworkUDP}, options.DialerOptions),
-		address:   options.Address,
-		peerUsers: peerUsers,
-		router:    router,
-		logger:    logger,
-		dnsRouter: service.FromContext[adapter.DNSRouter](ctx),
-		ctx:       ctx,
-		peers:     newDomainPeers(dial, domainPeers, len(options.Peers)), //H
-	}, nil
+	ep.Device = dev
+	return ep, nil
 }
 
 func genIpcConfig(opts option.AwgEndpointOptions, resolvePeer func(domain string) (netip.Addr, error)) (string, error) {
@@ -274,6 +279,7 @@ func (e *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	var metadata adapter.InboundContext
 	metadata.Inbound = e.Tag()
 	metadata.InboundType = e.Type()
+	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
 	metadata.User = e.peerUsers.Lookup(source.Addr) //H
 	metadata.Destination = destination
@@ -328,10 +334,31 @@ func (e *Endpoint) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 	return e.Device.ListenPacket(ctx, destination)
 }
 
+// JudgeFlow accepts every flow so it is dispatched to NewConnectionEx / NewPacketConnectionEx
+// and routed through sing-box (sniffing + per-user stats).
+func (w *Endpoint) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) singTun.FlowVerdict {
+	return singTun.FlowVerdict{Action: singTun.ActionAccept}
+}
+
+func (w *Endpoint) NewDNSPacket(payload []byte, source M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
+	ctx := log.ContextWithNewID(w.ctx)
+	var metadata adapter.InboundContext
+	metadata.Inbound = w.Tag()
+	metadata.InboundType = w.Type()
+	metadata.Network = N.NetworkUDP
+	metadata.Source = source
+	metadata.User = w.peerUsers.Lookup(source.Addr)
+	metadata.Destination = destination
+	metadata.Protocol = constant.ProtocolDNS
+	w.logger.InfoContext(ctx, "inbound DNS packet from ", source)
+	w.router.HijackDNSPacket(ctx, payload, writer, metadata)
+}
+
 func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	var metadata adapter.InboundContext
 	metadata.Inbound = w.Tag()
 	metadata.InboundType = w.Type()
+	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
 	metadata.User = w.peerUsers.Lookup(source.Addr) //H
 	for _, addr := range w.address {

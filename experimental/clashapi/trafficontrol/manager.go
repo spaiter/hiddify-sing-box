@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/compatible"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing/common"
@@ -35,6 +36,27 @@ type ConnectionEvent struct {
 
 const closedConnectionsLimit = 1000
 
+type UserStatsHook interface {
+	PushUploaded(user string, resource string, n int64)
+	PushDownloaded(user string, resource string, n int64)
+	ConnectionOpened(user string, resource string)
+	ConnectionClosed(user string)
+}
+
+func ExtractResource(metadata adapter.InboundContext) string {
+	if metadata.Domain != "" {
+		return metadata.Domain
+	}
+	destination := metadata.Destination
+	if destination.Addr.IsLoopback() && metadata.OriginDestination.IsValid() {
+		destination = metadata.OriginDestination
+	}
+	if destination.Addr.IsValid() {
+		return destination.Addr.String()
+	}
+	return ""
+}
+
 type Manager struct {
 	uploadTotal             atomic.Int64
 	downloadTotal           atomic.Int64
@@ -46,6 +68,11 @@ type Manager struct {
 	memory                  uint64
 
 	eventSubscriber *observable.Subscriber[ConnectionEvent]
+	userStatsHook   UserStatsHook
+}
+
+func (m *Manager) SetUserStatsHook(hook UserStatsHook) {
+	m.userStatsHook = hook
 }
 
 func NewManager() *Manager {
@@ -59,6 +86,9 @@ func (m *Manager) SetEventHook(subscriber *observable.Subscriber[ConnectionEvent
 func (m *Manager) Join(c Tracker) {
 	metadata := c.Metadata()
 	m.connections.Store(metadata.ID, c)
+	if m.userStatsHook != nil && metadata.Metadata.User != "" {
+		m.userStatsHook.ConnectionOpened(metadata.Metadata.User, ExtractResource(metadata.Metadata))
+	}
 	if m.eventSubscriber != nil {
 		m.eventSubscriber.Emit(ConnectionEvent{
 			Type:     ConnectionEventNew,
@@ -72,6 +102,9 @@ func (m *Manager) Leave(c Tracker) {
 	metadata := c.Metadata()
 	_, loaded := m.connections.LoadAndDelete(metadata.ID)
 	if loaded {
+		if m.userStatsHook != nil && metadata.Metadata.User != "" {
+			m.userStatsHook.ConnectionClosed(metadata.Metadata.User)
+		}
 		closedAt := time.Now()
 		metadata.ClosedAt = closedAt
 		metadataCopy := *metadata

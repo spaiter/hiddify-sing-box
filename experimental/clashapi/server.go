@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -43,18 +44,20 @@ func init() {
 var _ adapter.ClashServer = (*Server)(nil)
 
 type Server struct {
-	ctx            context.Context
-	network        adapter.NetworkManager
-	router         adapter.Router
-	dnsRouter      adapter.DNSRouter
-	outbound       adapter.OutboundManager
-	endpoint       adapter.EndpointManager
-	logger         log.Logger
-	httpServer     *http.Server
-	trafficManager *trafficontrol.Manager
-	urlTestHistory adapter.URLTestHistoryStorage
-	logDebug       bool
-	cleaner        *cleanup.Cleaner
+	ctx              context.Context
+	network          adapter.NetworkManager
+	router           adapter.Router
+	dnsRouter        adapter.DNSRouter
+	outbound         adapter.OutboundManager
+	endpoint         adapter.EndpointManager
+	logger           log.Logger
+	httpServer       *http.Server
+	trafficManager   *trafficontrol.Manager
+	urlTestHistory   adapter.URLTestHistoryStorage
+	logDebug         bool
+	cleaner          *cleanup.Cleaner
+	configManager    *ConfigManager
+	userStatsManager *UserStatsManager
 
 	mode           string
 	modeList       []string
@@ -92,6 +95,18 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 	s.urlTestHistory = service.FromContext[adapter.URLTestHistoryStorage](ctx)
 	if s.urlTestHistory == nil {
 		s.urlTestHistory = urltest.NewHistoryStorage()
+	}
+	if options.ConfigOutputPath != "" {
+		configPath := filemanager.BasePath(ctx, os.ExpandEnv(options.ConfigOutputPath))
+		s.configManager = NewConfigManager(ctx, configPath)
+		dbPath := filepath.Join(filepath.Dir(configPath), "user_stats.db")
+		statsManager, err := newUserStatsManager(s.logger, dbPath)
+		if err != nil {
+			s.logger.Error("failed to initialize user stats: ", err)
+		} else {
+			s.userStatsManager = statsManager
+			trafficManager.SetUserStatsHook(statsManager)
+		}
 	}
 	defaultMode := "Rule"
 	if options.DefaultMode != "" {
@@ -136,6 +151,12 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		r.Mount("/dns", dnsRouter(s.dnsRouter))
 
 		s.setupMetaAPI(r)
+		if s.configManager != nil {
+			r.Mount("/manage", manageRouter(s, logFactory))
+		}
+		if s.userStatsManager != nil {
+			r.Mount("/stats", statsRouter(s))
+		}
 	})
 	if options.ExternalUI != "" {
 		s.externalUI = filemanager.BasePath(ctx, os.ExpandEnv(options.ExternalUI))
@@ -143,6 +164,10 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 			r.Get("/ui", http.RedirectHandler("/ui/", http.StatusMovedPermanently).ServeHTTP)
 			r.Handle("/ui/*", http.StripPrefix("/ui/", http.FileServer(Dir(s.externalUI))))
 		})
+	}
+	if s.configManager != nil {
+		chiRouter.Get("/panel", http.RedirectHandler("/panel/", http.StatusMovedPermanently).ServeHTTP)
+		chiRouter.Get("/panel/", panelHandler())
 	}
 	return s, nil
 }
@@ -154,6 +179,9 @@ func (s *Server) Name() string {
 func (s *Server) Start(stage adapter.StartStage) error {
 	switch stage {
 	case adapter.StartStateStart:
+		if s.userStatsManager != nil {
+			s.userStatsManager.Start()
+		}
 		cacheFile := service.FromContext[adapter.CacheFile](s.ctx)
 		if cacheFile != nil {
 			mode := cacheFile.LoadMode()
@@ -200,6 +228,7 @@ func (s *Server) Close() error {
 		s.trafficManager,
 		s.urlTestHistory,
 		common.PtrOrNil(s.cleaner),
+		s.userStatsManager,
 	)
 }
 
@@ -260,10 +289,10 @@ func (s *Server) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, 
 
 type noopFlowTracker struct{}
 
-func (noopFlowTracker) AttachFlow(tun.FlowHandle)    {}
-func (noopFlowTracker) CountForward(int)             {}
-func (noopFlowTracker) CountReverse(int)             {}
-func (noopFlowTracker) FlowEstablished()             {}
+func (noopFlowTracker) AttachFlow(tun.FlowHandle)     {}
+func (noopFlowTracker) CountForward(int)              {}
+func (noopFlowTracker) CountReverse(int)              {}
+func (noopFlowTracker) FlowEstablished()              {}
 func (noopFlowTracker) CloseFlow(tun.FlowCloseReason) {}
 
 func (s *Server) RoutedFlow(ctx context.Context, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) tun.FlowTracker {

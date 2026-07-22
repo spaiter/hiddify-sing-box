@@ -17,6 +17,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/transport/awg"
+	singTun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -105,26 +106,31 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 
 	logger.Debug("AWG IPC config:\n", ipc)
 
-	dev, err := awg.NewDevice(ctx, logger, dial, ipc, awg.DeviceOpts{
-		UseIntegratedTun: options.UseIntegratedTun,
-		Address:          options.Address,
-		AllowedIps:       allowedIps.Prefixes(),
-		ExcludedIps:      excludedIps.Prefixes(),
-		MTU:              options.MTU,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &Endpoint{
-		Device:    dev,
+	ep := &Endpoint{
 		Adapter:   endpoint.NewAdapterWithDialerOptions("awg", tag, []string{N.NetworkTCP, N.NetworkUDP}, options.DialerOptions),
 		address:   options.Address,
 		router:    router,
 		logger:    logger,
 		dnsRouter: service.FromContext[adapter.DNSRouter](ctx),
 		ctx:       ctx,
-	}, nil
+	}
+
+	dev, err := awg.NewDevice(ctx, logger, dial, ipc, awg.DeviceOpts{
+		UseIntegratedTun: options.UseIntegratedTun,
+		Address:          options.Address,
+		AllowedIps:       allowedIps.Prefixes(),
+		ExcludedIps:      excludedIps.Prefixes(),
+		MTU:              options.MTU,
+		Handler:          ep,
+		UDPTimeout:       constant.UDPTimeout,
+		Context:          ctx,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ep.Device = dev
+
+	return ep, nil
 }
 
 func genIpcConfig(opts option.AwgEndpointOptions, resolvePeer func(domain string) (netip.Addr, error)) (string, error) {
@@ -229,6 +235,7 @@ func (e *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	var metadata adapter.InboundContext
 	metadata.Inbound = e.Tag()
 	metadata.InboundType = e.Type()
+	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
 	metadata.Destination = destination
 	for _, addr := range e.address {
@@ -282,10 +289,17 @@ func (e *Endpoint) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 	return e.Device.ListenPacket(ctx, destination)
 }
 
+func (w *Endpoint) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) singTun.FlowVerdict {
+	// Accept every flow so it is dispatched to NewConnectionEx / NewPacketConnectionEx
+	// (routed through sing-box for sniffing + per-user stats). Zero value == ActionAccept.
+	return singTun.FlowVerdict{}
+}
+
 func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	var metadata adapter.InboundContext
 	metadata.Inbound = w.Tag()
 	metadata.InboundType = w.Type()
+	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
 	for _, addr := range w.address {
 		if addr.Contains(destination.Addr) {

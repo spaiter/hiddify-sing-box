@@ -348,6 +348,34 @@ func TestSniffExtendedMessage(t *testing.T) {
 	require.Equal(t, C.ProtocolBitTorrent, metadata.Protocol)
 }
 
+func TestSniffExtendedMessageNonHandshake(t *testing.T) {
+	t.Parallel()
+
+	// Non-handshake extended message: length=50, msgID=0x14, extID=1 (non-zero)
+	data := []byte{0x00, 0x00, 0x00, 0x32, 0x14, 0x01, 0xAB}
+
+	var metadata adapter.InboundContext
+	err := sniff.BitTorrentExtended(context.TODO(), &metadata, bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Equal(t, C.ProtocolBitTorrent, metadata.Protocol)
+}
+
+func TestSniffExtendedMessageRejectsTelegramMTProto(t *testing.T) {
+	t.Parallel()
+
+	// Real payload captured 2026-06-12 17:13:17 from a false positive detection:
+	// source=91.78.192.63:26017, destination=149.154.166.111:443 (Telegram MTProto server).
+	// bytes[0:4]=0xe2d49e6b => msgLen=3,805,585,003 (invalid, max valid ~131072)
+	// bytes[4]=0x14 => coincidental match with BEP 10 extended message ID
+	// bytes[5]=0x9c => extID=156 (non-zero, no bencode 'd' check triggered)
+	// Without length validation the old code hit bare "return true" — false positive.
+	data, _ := hex.DecodeString("e2d49e6b149cff")
+
+	var metadata adapter.InboundContext
+	err := sniff.BitTorrentExtended(context.TODO(), &metadata, bytes.NewReader(data))
+	require.Error(t, err)
+}
+
 // --- HTTP BitTorrent tests ---
 
 func TestSniffHTTPBitTorrent(t *testing.T) {

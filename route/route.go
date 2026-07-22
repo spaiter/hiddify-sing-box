@@ -2,6 +2,7 @@ package route
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/netip"
@@ -307,6 +308,9 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		selectedOutbound = defaultOutbound
 	}
 	for _, buffer := range packetBuffers {
+		if buffer == nil || buffer.Buffer == nil {
+			continue
+		}
 		conn = bufio.NewCachedPacketConn(conn, buffer.Buffer, buffer.Destination)
 		N.PutPacketBuffer(buffer)
 	}
@@ -716,6 +720,7 @@ func (r *Router) actionSniff(
 			} else {
 				r.logger.DebugContext(ctx, "sniffed protocol: ", metadata.Protocol)
 			}
+			r.logBitTorrentSniff(ctx, metadata, N.NetworkTCP, collectStreamSniffPayload(inputBuffers, sniffBuffer))
 		}
 		if !sniffBuffer.IsEmpty() {
 			buffer = sniffBuffer
@@ -747,6 +752,7 @@ func (r *Router) actionSniff(
 			}
 		}
 		var err error
+		var sniffPayload []byte
 		for _, packetBuffer := range inputPacketBuffers {
 			if quicMoreData() {
 				err = sniff.PeekPacket(
@@ -764,6 +770,9 @@ func (r *Router) actionSniff(
 			}
 			metadata.SnifferNames = action.SnifferNames
 			metadata.SniffError = err
+			if err == nil {
+				sniffPayload = packetBuffer.Buffer.Bytes()
+			}
 			if errors.Is(err, sniff.ErrNeedMoreData) {
 				// TODO: replace with generic message when there are more multi-packet protocols
 				r.logger.DebugContext(ctx, "attempt to sniff fragmented QUIC client hello")
@@ -824,6 +833,9 @@ func (r *Router) actionSniff(
 				packetBuffers = append(packetBuffers, packetBuffer)
 				metadata.SnifferNames = action.SnifferNames
 				metadata.SniffError = err
+				if err == nil {
+					sniffPayload = sniffBuffer.Bytes()
+				}
 				if errors.Is(err, sniff.ErrNeedMoreData) {
 					// TODO: replace with generic message when there are more multi-packet protocols
 					r.logger.DebugContext(ctx, "attempt to sniff fragmented QUIC client hello")
@@ -850,9 +862,88 @@ func (r *Router) actionSniff(
 			} else {
 				r.logger.DebugContext(ctx, "sniffed packet protocol: ", metadata.Protocol)
 			}
+			r.logBitTorrentSniff(ctx, metadata, N.NetworkUDP, sniffPayload)
 		}
 	}
 	return
+}
+
+const maxBitTorrentSniffLogPayload = 512
+
+func collectStreamSniffPayload(inputBuffers []*buf.Buffer, sniffBuffer *buf.Buffer) []byte {
+	payload := make([]byte, 0, maxBitTorrentSniffLogPayload)
+	for _, inputBuffer := range inputBuffers {
+		if inputBuffer == nil {
+			continue
+		}
+		payload = appendPayloadSample(payload, inputBuffer.Bytes())
+		if len(payload) >= maxBitTorrentSniffLogPayload {
+			return payload
+		}
+	}
+	if sniffBuffer != nil {
+		payload = appendPayloadSample(payload, sniffBuffer.Bytes())
+	}
+	return payload
+}
+
+func appendPayloadSample(payload []byte, next []byte) []byte {
+	if len(payload) >= maxBitTorrentSniffLogPayload || len(next) == 0 {
+		return payload
+	}
+	remaining := maxBitTorrentSniffLogPayload - len(payload)
+	if len(next) > remaining {
+		next = next[:remaining]
+	}
+	return append(payload, next...)
+}
+
+func (r *Router) logBitTorrentSniff(ctx context.Context, metadata *adapter.InboundContext, network string, payload []byte) {
+	if metadata.Protocol != C.ProtocolBitTorrent {
+		return
+	}
+	detector := metadata.SniffDetector
+	if detector == "" {
+		detector = "unknown"
+	}
+	payloadSize := len(payload)
+	if payloadSize > maxBitTorrentSniffLogPayload {
+		payload = payload[:maxBitTorrentSniffLogPayload]
+	}
+	truncated := ""
+	if payloadSize > len(payload) {
+		truncated = ", payload_truncated=true"
+	}
+	r.logger.InfoContext(
+		ctx,
+		"bittorrent sniff detection: network=", network,
+		", detector=", detector,
+		", inbound=", metadata.Inbound,
+		", source=", metadata.Source,
+		", destination=", metadata.Destination,
+		", payload_bytes=", payloadSize,
+		truncated,
+		"\nhex dump:\n", hex.Dump(payload),
+		"ascii:\n", printablePayload(payload),
+	)
+}
+
+func printablePayload(payload []byte) string {
+	if len(payload) == 0 {
+		return "(empty)"
+	}
+	var builder strings.Builder
+	builder.Grow(len(payload))
+	for _, b := range payload {
+		if b >= 32 && b <= 126 {
+			builder.WriteByte(b)
+		} else if b == '\n' || b == '\r' || b == '\t' {
+			builder.WriteByte(b)
+		} else {
+			builder.WriteByte('.')
+		}
+	}
+	return builder.String()
 }
 
 func (r *Router) actionResolve(ctx context.Context, metadata *adapter.InboundContext, action *R.RuleActionResolve) error {

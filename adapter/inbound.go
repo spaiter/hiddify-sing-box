@@ -57,19 +57,20 @@ type InboundContext struct {
 
 	// sniffer
 
-	Protocol     string
-	Domain       string
-	Client       string
-	SniffContext any
-	SnifferNames []string
-	SniffError   error
+	Protocol      string
+	Domain        string
+	Client        string
+	SniffContext  any
+	SnifferNames  []string
+	SniffDetector string
+	SniffError    error
 
 	// cache
 
 	// Deprecated: implement in rule action
-	InboundDetour             string
-	LastInbound               string
-	OriginDestination         M.Socksaddr
+	InboundDetour            string
+	LastInbound              string
+	OriginDestination        M.Socksaddr
 	RouteOriginalDestination M.Socksaddr
 	// Deprecated: to be removed
 	//nolint:staticcheck

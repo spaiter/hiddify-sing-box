@@ -10,7 +10,6 @@ import (
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	E "github.com/sagernet/sing/common/exceptions"
-	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
 
@@ -32,7 +31,15 @@ func newBind(ctx context.Context, dial N.Dialer) conn.Bind {
 }
 
 func (b *bind_adapter) connect(addr netip.Addr, port uint16) (net.PacketConn, error) {
-	return b.dialer.ListenPacket(b.ctx, M.Socksaddr{Addr: addr, Port: port})
+	// Bind a real listening UDP socket on the WireGuard listen_port so the AWG
+	// endpoint works as a server (accepts incoming clients). sing-box's
+	// dialer.ListenPacket treats the socksaddr as a destination, not a local
+	// bind, leaving the port unbound — hence the server never listened. //H fix
+	network := "udp4"
+	if addr.Is6() {
+		network = "udp6"
+	}
+	return net.ListenUDP(network, &net.UDPAddr{IP: addr.AsSlice(), Port: int(port)})
 }
 
 func (b *bind_adapter) receive(c net.PacketConn) conn.ReceiveFunc {

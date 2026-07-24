@@ -25,3 +25,7 @@ _htest/
 CLAUDE.md
 AGENTS.md
 /.claude/
+
+# local build artifacts
+/sing-box-static
+/sing-box-new

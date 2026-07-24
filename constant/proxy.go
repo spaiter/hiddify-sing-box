@@ -44,6 +44,7 @@ const (
 	TypeWARP               = "warp"
 	TypeMieru              = "mieru"
 	TypeMASQUE             = "masque"
+	TypeMASQUEWG           = "masque-wg" //H self-hosted MASQUE(CONNECT-UDP)+WireGuard pair
 	TypePsiphon            = "psiphon"
 	TypeTunnelClient       = "tunnel_client"
 	TypeTunnelServer       = "tunnel_server"

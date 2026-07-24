@@ -40,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/shadowtls"
 	snellprotocol "github.com/sagernet/sing-box/protocol/snell"
+	"github.com/sagernet/sing-box/protocol/masquewg" //H
 	"github.com/sagernet/sing-box/protocol/socks"
 	"github.com/sagernet/sing-box/protocol/ssh"
 	"github.com/sagernet/sing-box/protocol/tor"
@@ -79,6 +80,7 @@ func InboundRegistry() *inbound.Registry {
 	trojan.RegisterInbound(registry)
 	naive.RegisterInbound(registry)
 	mtproto.RegisterInbound(registry) //H
+	masquewg.RegisterInbound(registry) //H
 	shadowtls.RegisterInbound(registry)
 	vless.RegisterInbound(registry)
 	anytls.RegisterInbound(registry)
@@ -115,6 +117,7 @@ func OutboundRegistry() *outbound.Registry {
 	shadowtls.RegisterOutbound(registry)
 	vless.RegisterOutbound(registry)
 	anytls.RegisterOutbound(registry)
+	masquewg.RegisterOutbound(registry) //H
 	psiphon.RegisterOutbound(registry)
 	mieru.RegisterOutbound(registry)
 	hinvalid.RegisterOutbound(registry)

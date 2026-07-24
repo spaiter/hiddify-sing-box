@@ -29,6 +29,10 @@ type DeviceOpts struct {
 	Handler          singTun.Handler
 	UDPTimeout       time.Duration
 	Context          context.Context
+	// Bind, when non-nil, replaces the default UDP-socket bind. Used by the
+	// masque-wg outbound to ride WireGuard over a MASQUE CONNECT-UDP flow. The
+	// server-side awg endpoint leaves this nil and keeps its normal bind. //H
+	Bind conn.Bind
 }
 
 type Device struct {
@@ -71,9 +75,13 @@ func NewDevice(ctx context.Context, logger logger.ContextLogger, dial network.Di
 		},
 	}
 
+	bnd := opts.Bind //H allow injecting a custom bind (masque-wg); default otherwise
+	if bnd == nil {
+		bnd = newBind(ctx, dial)
+	}
 	return &Device{
 		tun:       tun,
-		bind:      newBind(ctx, dial),
+		bind:      bnd,
 		logger:    awgLogger,
 		ipcConfig: ipcConfig,
 	}, nil

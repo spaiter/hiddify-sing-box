@@ -17,6 +17,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
+	sbdialer "github.com/sagernet/sing-box/common/dialer"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -42,13 +43,15 @@ type Outbound struct {
 	serverAddr string
 	template   *uritemplate.Template
 	tlsConfig  *tls.Config
+	dialer     N.Dialer
 	bind       *masqueBind
 	device     *awg.Device
 	dnsRouter  adapter.DNSRouter
 
-	mu      sync.Mutex
-	started bool
-	conn    *masque.Conn
+	mu              sync.Mutex
+	started         bool
+	conn            *masque.Conn
+	outerPacketConn net.PacketConn
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MASQUEWGOutboundOptions) (adapter.Outbound, error) {
@@ -76,6 +79,10 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	tmpl := uritemplate.MustNew(fmt.Sprintf("https://%s:%d%s?h={target_host}&p={target_port}",
 		serverName, options.ServerPort, path))
+	outerDialer, err := sbdialer.New(ctx, options.DialerOptions, options.ServerIsDomain())
+	if err != nil {
+		return nil, E.Cause(err, "masque-wg: create outer dialer")
+	}
 
 	ipc, err := genIpc(options)
 	if err != nil {
@@ -109,6 +116,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 			NextProtos:         []string{http3.NextProtoH3},
 			InsecureSkipVerify: insecure,
 		},
+		dialer:    outerDialer,
 		bind:      bind,
 		device:    dev,
 		dnsRouter: service.FromContext[adapter.DNSRouter](ctx),
@@ -120,7 +128,24 @@ func (o *Outbound) PostStart() error {
 		TLSClientConfig: o.tlsConfig,
 		QUICConfig:      &qgo.Config{EnableDatagrams: true, InitialPacketSize: 1350},
 		DialAddr: func(ctx context.Context, _ string, tlsConf *tls.Config, quicConf *qgo.Config) (*qgo.Conn, error) {
-			return qgo.DialAddr(ctx, o.serverAddr, tlsConf, quicConf)
+			udpAddr, err := net.ResolveUDPAddr(N.NetworkUDP, o.serverAddr)
+			if err != nil {
+				return nil, err
+			}
+			destination := M.ParseSocksaddrHostPort(udpAddr.IP.String(), uint16(udpAddr.Port))
+			packetConn, err := o.dialer.ListenPacket(ctx, destination)
+			if err != nil {
+				return nil, err
+			}
+			conn, err := qgo.Dial(ctx, packetConn, udpAddr, tlsConf, quicConf)
+			if err != nil {
+				packetConn.Close()
+				return nil, err
+			}
+			o.mu.Lock()
+			o.outerPacketConn = packetConn
+			o.mu.Unlock()
+			return conn, nil
 		},
 	}
 	// The server locks the CONNECT-UDP target to its WG port, so the requested
@@ -198,13 +223,18 @@ func (o *Outbound) Close() error {
 	o.mu.Lock()
 	dev := o.device
 	conn := o.conn
+	outerPacketConn := o.outerPacketConn
 	o.started = false
+	o.outerPacketConn = nil
 	o.mu.Unlock()
 	if dev != nil {
 		dev.Close()
 	}
 	if conn != nil {
 		conn.Close()
+	}
+	if outerPacketConn != nil {
+		outerPacketConn.Close()
 	}
 	return nil
 }

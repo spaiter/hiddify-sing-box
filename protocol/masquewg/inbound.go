@@ -115,7 +115,16 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 	mux.HandleFunc(h.path, h.handle)
 	h.server = &http3.Server{Handler: mux, EnableDatagrams: true}
 
-	ln, err := qgo.ListenEarly(packetConn, http3.ConfigureTLSConfig(stdCfg), &qgo.Config{EnableDatagrams: true})
+	// Keep every QUIC packet small (<=1200, the QUIC minimum) and never probe the
+	// path upward: clients reach this over mobile/DS-Lite links whose MTU is often
+	// ~1280, so larger packets (default up to 1452 via DPLPMTUD) get silently
+	// dropped and the CONNECT-UDP response never arrives. 1200-byte packets fit any
+	// conformant path.
+	ln, err := qgo.ListenEarly(packetConn, http3.ConfigureTLSConfig(stdCfg), &qgo.Config{
+		EnableDatagrams:         true,
+		InitialPacketSize:       1200,
+		DisablePathMTUDiscovery: true,
+	})
 	if err != nil {
 		return E.Cause(err, "masque-wg: quic listen")
 	}

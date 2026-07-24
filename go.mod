@@ -310,4 +310,4 @@ replace github.com/Psiphon-Labs/psiphon-tls => ./replace/psiphon-tls
 
 replace github.com/net2share/vaydns => github.com/hiddify/vaydns v0.0.0-20260401180616-890dc987a6a9
 
-replace github.com/kianmhz/GooseRelayVPN => /home/spaiter/gooserelay-vendor
+replace github.com/kianmhz/GooseRelayVPN => ./replace/gooserelay

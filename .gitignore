@@ -29,3 +29,7 @@ AGENTS.md
 !/CLAUDE.md
 !/AGENTS.md
 !/.claude/skills/
+
+# local build artifacts
+/sing-box-static
+/sing-box-new

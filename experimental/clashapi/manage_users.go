@@ -124,6 +124,16 @@ func getInboundUsers(inbound option.Inbound) ([]any, error) {
 			users[i] = u
 		}
 		return users, nil
+	case C.TypeSnell:
+		opts, ok := inbound.Options.(*option.SnellInboundOptions)
+		if !ok {
+			return nil, nil
+		}
+		users := make([]any, len(opts.Users))
+		for i, u := range opts.Users {
+			users[i] = u
+		}
+		return users, nil
 	case C.TypeNaive:
 		opts, ok := inbound.Options.(*option.NaiveInboundOptions)
 		if !ok {
@@ -237,6 +247,12 @@ func unmarshalUser(inboundType string, body []byte) (any, error) {
 			return nil, err
 		}
 		return user, nil
+	case C.TypeSnell:
+		var user option.SnellUser
+		if err := json.Unmarshal(body, &user); err != nil {
+			return nil, err
+		}
+		return user, nil
 	case C.TypeNaive, C.TypeSOCKS, C.TypeHTTP, C.TypeMixed:
 		var user auth.User
 		if err := json.Unmarshal(body, &user); err != nil {
@@ -271,6 +287,8 @@ func getUserName(user any) string {
 	case option.ShadowTLSUser:
 		return u.Name
 	case option.AnyTLSUser:
+		return u.Name
+	case option.SnellUser:
 		return u.Name
 	case auth.User:
 		return u.Username
@@ -314,6 +332,9 @@ func addUserToInbound(inbound *option.Inbound, user any) error {
 	case C.TypeAnyTLS:
 		opts := inbound.Options.(*option.AnyTLSInboundOptions)
 		opts.Users = append(opts.Users, user.(option.AnyTLSUser))
+	case C.TypeSnell:
+		opts := inbound.Options.(*option.SnellInboundOptions)
+		opts.Users = append(opts.Users, user.(option.SnellUser))
 	case C.TypeNaive:
 		opts := inbound.Options.(*option.NaiveInboundOptions)
 		opts.Users = append(opts.Users, user.(auth.User))
@@ -416,6 +437,14 @@ func removeUserFromInbound(inbound *option.Inbound, name string) error {
 		}
 	case C.TypeAnyTLS:
 		opts := inbound.Options.(*option.AnyTLSInboundOptions)
+		for i, u := range opts.Users {
+			if u.Name == name {
+				opts.Users = append(opts.Users[:i], opts.Users[i+1:]...)
+				return nil
+			}
+		}
+	case C.TypeSnell:
+		opts := inbound.Options.(*option.SnellInboundOptions)
 		for i, u := range opts.Users {
 			if u.Name == name {
 				opts.Users = append(opts.Users[:i], opts.Users[i+1:]...)
@@ -547,6 +576,14 @@ func replaceUserInInbound(inbound *option.Inbound, name string, user any) error 
 		for i, u := range opts.Users {
 			if u.Name == name {
 				opts.Users[i] = user.(option.AnyTLSUser)
+				return nil
+			}
+		}
+	case C.TypeSnell:
+		opts := inbound.Options.(*option.SnellInboundOptions)
+		for i, u := range opts.Users {
+			if u.Name == name {
+				opts.Users[i] = user.(option.SnellUser)
 				return nil
 			}
 		}

@@ -30,6 +30,10 @@ import (
 	"go4.org/netipx"
 )
 
+// Mirrors device.HeaderCipherNonceSize in amneziawg-go/v3: the header cipher
+// takes its nonce out of the S1-S4 padding. //H awg3
+const awgHeaderProtectionMinPadding = 12
+
 func RegisterEndpoint(registry *endpoint.Registry) {
 	endpoint.Register(registry, constant.TypeAwg, NewEndpoint)
 }
@@ -216,8 +220,30 @@ func genIpcConfig(opts option.AwgEndpointOptions, resolvePeer func(domain string
 		s += "\ni5=" + awg.I5
 	}
 	// AmneziaWG 3.x
+	// H: the Amnezia .conf (and our subscriptions) spell header_protection_key in base64, like
+	// private_key; the UAPI takes hex. 64 hex digits are passed through for upstream configs. //H
+	if awg.HeaderProtectionKey != "" { //H
+		// Header protection draws its per-packet nonce from the S1-S4 padding; shorter padding
+		// breaks the handshake silently, so fail loudly here. //H
+		for _, sv := range []struct { //H
+			name  string //H
+			value int    //H
+		}{{"s1", awg.S1}, {"s2", awg.S2}, {"s3", awg.S3}, {"s4", awg.S4}} { //H
+			if sv.value < awgHeaderProtectionMinPadding { //H
+				return "", E.New("awg: header_protection_key requires ", sv.name, " >= ", awgHeaderProtectionMinPadding, ", got ", sv.value) //H
+			} //H
+		} //H
+		headerKey := awg.HeaderProtectionKey                                           //H
+		if _, err := hex.DecodeString(headerKey); err != nil || len(headerKey) != 64 { //H
+			headerKeyBytes, err := base64.StdEncoding.DecodeString(headerKey) //H
+			if err != nil {                                                   //H
+				return "", E.Cause(err, "decode header_protection_key") //H
+			} //H
+			headerKey = hex.EncodeToString(headerKeyBytes) //H
+		} //H
+		s += "\nheader_protection_key=" + headerKey //H
+	} //H
 	for _, setting := range []struct{ key, value string }{
-		{"header_protection_key", awg.HeaderProtectionKey},
 		{"content_padding_addition", string(awg.ContentPaddingAddition)},
 		{"rekey_after_time", string(awg.RekeyAfterTime)},
 		{"rekey_timeout", string(awg.RekeyTimeout)},

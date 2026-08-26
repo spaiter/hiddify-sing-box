@@ -28,6 +28,10 @@ import (
 	"go4.org/netipx"
 )
 
+// Mirrors device.HeaderCipherNonceSize in amneziawg-go/v3: the header cipher
+// takes its nonce out of the S1-S4 padding. //H awg3
+const awgHeaderProtectionMinPadding = 12
+
 func RegisterEndpoint(registry *endpoint.Registry) {
 	endpoint.Register(registry, constant.TypeAwg, NewEndpoint)
 }
@@ -190,6 +194,43 @@ func genIpcConfig(opts option.AwgEndpointOptions, resolvePeer func(domain string
 	}
 	if awg.I5 != "" {
 		s += "\ni5=" + awg.I5
+	}
+	// AWG 3.x. The UAPI takes the header protection key as hex, while the
+	// Amnezia .conf spells it base64 — same split as private_key above. //H awg3
+	if awg.HeaderProtectionKey != "" {
+		// Header protection draws its per-packet nonce from the S1-S4 crypto
+		// padding, so anything shorter than the ChaCha20 nonce silently breaks
+		// the handshake instead of erroring out. Fail loudly here.
+		for _, sv := range [][2]any{
+			{"s1", awg.S1}, {"s2", awg.S2}, {"s3", awg.S3}, {"s4", awg.S4},
+		} {
+			if sv[1].(int) < awgHeaderProtectionMinPadding {
+				return "", E.New("awg: header_protection_key requires ", sv[0], " >= ", awgHeaderProtectionMinPadding, ", got ", sv[1])
+			}
+		}
+		headerKeyBytes, err := base64.StdEncoding.DecodeString(awg.HeaderProtectionKey)
+		if err != nil {
+			return "", E.Cause(err, "decode header_protection_key")
+		}
+		s += "\nheader_protection_key=" + hex.EncodeToString(headerKeyBytes)
+	}
+	for _, kv := range [][2]string{
+		{"content_padding_addition", awg.ContentPaddingAddition},
+		{"rekey_after_time", awg.RekeyAfterTime},
+		{"rekey_timeout", awg.RekeyTimeout},
+		{"reject_after_time", awg.RejectAfterTime},
+		{"keepalive_timeout", awg.KeepaliveTimeout},
+		{"max_handshake_attempts", awg.MaxHandshakeAttempts},
+	} {
+		if kv[1] != "" {
+			s += "\n" + kv[0] + "=" + kv[1]
+		}
+	}
+	if awg.RandomTrailers {
+		s += "\nrandom_trailers=true"
+	}
+	if awg.DisableCookies {
+		s += "\ndisable_cookies=true"
 	}
 
 	for _, peer := range opts.Peers {

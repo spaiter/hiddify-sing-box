@@ -312,3 +312,11 @@ replace github.com/net2share/vaydns => github.com/hiddify/vaydns v0.0.0-20260401
 replace github.com/kianmhz/GooseRelayVPN => ./replace/gooserelay
 
 replace github.com/sagernet/sing-snell => github.com/reF1nd/sing-snell v0.0.0-20260713132549-9711346e2b35
+
+// Vendored to make the user set swappable on a running service, so adding a
+// user does not require tearing the inbound down. Upstream sing-anytls has
+// UpdateUsers but assigns the map unsynchronised (a hard concurrent-map crash
+// against the auth lookup); upstream sing-shadowtls has no setter at all. //H
+replace github.com/anytls/sing-anytls => ./replace/sing-anytls
+
+replace github.com/sagernet/sing-shadowtls => ./replace/sing-shadowtls

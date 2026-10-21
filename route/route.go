@@ -45,12 +45,50 @@ func (r *Router) xdpBlockIfBitTorrent(action *R.RuleActionReject, metadata adapt
 	if dur == 0 {
 		dur = 5 * time.Hour
 	}
-	blocker.BlockIP(metadata.Source.Addr, dur)
+	target, ok := r.xdpBlockTarget(metadata)
+	if !ok {
+		return
+	}
+	blocker.BlockIP(target, dur)
 	// Block every known IP of the user so BitTorrent can't continue over the
 	// other address family (dual-stack bypass). //H
 	if metadata.User != "" {
 		blocker.BlockUserIPs(metadata.User, dur)
 	}
+}
+
+// xdpBlockTarget picks the address to install in the XDP filter. Proxy inbounds
+// already carry the client's real address in metadata.Source, so it is used as
+// is. WireGuard-style endpoints instead report an address from inside the
+// tunnel (10.10.0.2), which no filter on a physical interface can ever match —
+// those endpoints implement PeerEndpointResolver, and we ban the peer's real
+// external address instead. Deciding on the inbound's kind rather than on the
+// address range matters: a private source is perfectly blockable when the
+// filter sits on the interface that carries it. //H
+func (r *Router) xdpBlockTarget(metadata adapter.InboundContext) (netip.Addr, bool) {
+	source := metadata.Source.Addr
+	endpointManager := service.FromContext[adapter.EndpointManager](r.ctx)
+	if endpointManager == nil {
+		return source, true
+	}
+	endpoint, loaded := endpointManager.Get(metadata.Inbound)
+	if !loaded {
+		return source, true
+	}
+	resolver, isResolver := endpoint.(adapter.PeerEndpointResolver)
+	if !isResolver {
+		return source, true
+	}
+	external, found := resolver.PeerEndpointFor(source)
+	if !found {
+		r.logger.DebugContext(r.ctx, "XDP: no endpoint known for tunnel address ", source, " on ", metadata.Inbound)
+		return netip.Addr{}, false
+	}
+	if !adapter.BlockablePeerEndpoint(external) {
+		r.logger.DebugContext(r.ctx, "XDP: skipping local peer endpoint ", external, " for ", source)
+		return netip.Addr{}, false
+	}
+	return external, true
 }
 
 var defaultPacketSniffers = []sniff.PacketSniffer{
@@ -113,7 +151,9 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 	}
 	if metadata.User != "" {
 		if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
-			blocker.TrackUserIP(metadata.User, metadata.Source.Addr)
+			if tracked, ok := r.xdpBlockTarget(metadata); ok {
+				blocker.TrackUserIP(metadata.User, tracked)
+			}
 		}
 	}
 	metadata.Network = N.NetworkTCP
@@ -258,7 +298,9 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 	}
 	if metadata.User != "" {
 		if blocker := service.FromContext[adapter.XDPBlocker](r.ctx); blocker != nil {
-			blocker.TrackUserIP(metadata.User, metadata.Source.Addr)
+			if tracked, ok := r.xdpBlockTarget(metadata); ok {
+				blocker.TrackUserIP(metadata.User, tracked)
+			}
 		}
 	}
 	// TODO: move to UoT

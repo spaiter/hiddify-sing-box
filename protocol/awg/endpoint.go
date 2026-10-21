@@ -45,6 +45,7 @@ type Endpoint struct {
 	dnsRouter adapter.DNSRouter
 	started   bool
 	ctx       context.Context
+	peerNames *peerNameTable //H attributes tunnel traffic to a named peer
 }
 
 func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.AwgEndpointOptions) (adapter.Endpoint, error) {
@@ -117,6 +118,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		logger:    logger,
 		dnsRouter: service.FromContext[adapter.DNSRouter](ctx),
 		ctx:       ctx,
+		peerNames: newPeerNameTable(options.Peers),
 	}
 
 	dev, err := awg.NewDevice(ctx, logger, dial, ipc, awg.DeviceOpts{
@@ -278,6 +280,7 @@ func (e *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	metadata.InboundType = e.Type()
 	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
+	metadata.User = e.peerNames.Lookup(source.Addr) //H
 	metadata.Destination = destination
 	for _, addr := range e.address {
 		if addr.Contains(destination.Addr) {
@@ -342,6 +345,7 @@ func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.
 	metadata.InboundType = w.Type()
 	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
+	metadata.User = w.peerNames.Lookup(source.Addr) //H
 	for _, addr := range w.address {
 		if addr.Contains(destination.Addr) {
 			metadata.OriginDestination = destination

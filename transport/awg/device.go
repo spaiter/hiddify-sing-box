@@ -36,11 +36,12 @@ type DeviceOpts struct {
 }
 
 type Device struct {
-	awgDevice *device.Device
-	tun       tunAdapter
-	bind      conn.Bind
-	logger    *device.Logger
-	ipcConfig string
+	awgDevice     *device.Device
+	tun           tunAdapter
+	bind          conn.Bind
+	logger        *device.Logger
+	ipcConfig     string
+	peerEndpoints peerEndpointCache //H tunnel address → peer's external IP
 }
 
 func NewDevice(ctx context.Context, logger logger.ContextLogger, dial network.Dialer, ipcConfig string, opts DeviceOpts) (*Device, error) {

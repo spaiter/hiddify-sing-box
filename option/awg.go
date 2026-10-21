@@ -79,8 +79,13 @@ func (o *AwgOptions) IsAvailble() bool {
 }
 
 type AwgPeerOptions struct {
-	Address                     string                           `json:"address,omitempty"`
-	Port                        uint16                           `json:"port,omitempty"`
+	Address string `json:"address,omitempty"`
+	Port    uint16 `json:"port,omitempty"`
+	// Name attributes the peer's traffic to a user, the way the `users` list
+	// does for proxy inbounds: it populates metadata.User, which drives the
+	// per-user SQLite stats and the XDP blocker's per-user IP tracking.
+	// Optional — an unnamed peer simply stays unattributed, as before. //H
+	Name                        string                           `json:"name,omitempty"`
 	PublicKey                   string                           `json:"public_key,omitempty"`
 	PresharedKey                string                           `json:"preshared_key,omitempty"`
 	AllowedIPs                  badoption.Listable[netip.Prefix] `json:"allowed_ips,omitempty"`

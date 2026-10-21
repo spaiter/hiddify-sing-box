@@ -105,6 +105,24 @@ func (d *Device) Start(stage adapter.StartStage) error {
 	return d.awgDevice.Up()
 }
 
+// IpcSetDelta applies a partial UAPI config to the running device. Unlike the
+// IpcSet done at startup this must NOT carry `replace_peers`, so peers the
+// delta does not mention are left exactly as they are — keys, handshake and
+// all. Invalidates the peer-endpoint cache, whose contents the delta may have
+// just changed. //H
+func (d *Device) IpcSetDelta(ipcConfig string) error {
+	if d.awgDevice == nil {
+		return E.New("awg: device not started")
+	}
+	if err := d.awgDevice.IpcSet(ipcConfig); err != nil {
+		return err
+	}
+	d.peerEndpoints.mu.Lock()
+	d.peerEndpoints.expires = time.Time{}
+	d.peerEndpoints.mu.Unlock()
+	return nil
+}
+
 func (d *Device) IsUnderLoad() bool {
 	if d.awgDevice == nil {
 		return false

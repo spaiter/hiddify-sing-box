@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -45,7 +46,10 @@ type Endpoint struct {
 	dnsRouter adapter.DNSRouter
 	started   bool
 	ctx       context.Context
-	peerNames *peerNameTable //H attributes tunnel traffic to a named peer
+	// peerNames is swapped atomically: ReloadPeers can replace it while
+	// connection handlers are reading it. //H
+	peerNames atomic.Pointer[peerNameTable]
+	peerState *peerState //H peers currently programmed into the device
 }
 
 func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.AwgEndpointOptions) (adapter.Endpoint, error) {
@@ -118,8 +122,9 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		logger:    logger,
 		dnsRouter: service.FromContext[adapter.DNSRouter](ctx),
 		ctx:       ctx,
-		peerNames: newPeerNameTable(options.Peers),
+		peerState: newPeerState(options.Peers),
 	}
+	ep.peerNames.Store(newPeerNameTable(options.Peers))
 
 	dev, err := awg.NewDevice(ctx, logger, dial, ipc, awg.DeviceOpts{
 		UseIntegratedTun: options.UseIntegratedTun,
@@ -236,40 +241,52 @@ func genIpcConfig(opts option.AwgEndpointOptions, resolvePeer func(domain string
 	}
 
 	for _, peer := range opts.Peers {
-		publicKeyBytes, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+		peerConfig, err := genIpcPeer(peer, resolvePeer)
 		if err != nil {
 			return "", err
 		}
-		s += "\npublic_key=" + hex.EncodeToString(publicKeyBytes)
-		if peer.PresharedKey != "" {
-			presharedKeyBytes, err := base64.StdEncoding.DecodeString(peer.PresharedKey)
-			if err != nil {
-				return "", err
+		s += peerConfig
+	}
+	return s, nil
+}
+
+// genIpcPeer renders one peer's UAPI lines, each prefixed with a newline.
+// Split out of genIpcConfig so ReloadPeers can emit the same wire format for a
+// single peer without rebuilding the whole device config. //H
+func genIpcPeer(peer option.AwgPeerOptions, resolvePeer func(domain string) (netip.Addr, error)) (string, error) {
+	publicKeyBytes, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+	if err != nil {
+		return "", err
+	}
+	s := "\npublic_key=" + hex.EncodeToString(publicKeyBytes)
+	if peer.PresharedKey != "" {
+		presharedKeyBytes, err := base64.StdEncoding.DecodeString(peer.PresharedKey)
+		if err != nil {
+			return "", err
+		}
+		s += "\npreshared_key=" + hex.EncodeToString(presharedKeyBytes)
+	}
+	if peer.Address != "" && peer.Port != 0 {
+		// Resolve domain to IP if necessary
+		endpointAddr := peer.Address
+		if addr := M.ParseAddr(peer.Address); !addr.IsValid() {
+			// It's a domain, resolve it
+			if resolvePeer == nil {
+				return "", E.New("peer address is a domain but no resolver provided: ", peer.Address)
 			}
-			s += "\npreshared_key=" + hex.EncodeToString(presharedKeyBytes)
-		}
-		if peer.Address != "" && peer.Port != 0 {
-			// Resolve domain to IP if necessary
-			endpointAddr := peer.Address
-			if addr := M.ParseAddr(peer.Address); !addr.IsValid() {
-				// It's a domain, resolve it
-				if resolvePeer == nil {
-					return "", E.New("peer address is a domain but no resolver provided: ", peer.Address)
-				}
-				resolvedAddr, resolveErr := resolvePeer(peer.Address)
-				if resolveErr != nil {
-					return "", E.Cause(resolveErr, "resolve peer endpoint ", peer.Address)
-				}
-				endpointAddr = resolvedAddr.String()
+			resolvedAddr, resolveErr := resolvePeer(peer.Address)
+			if resolveErr != nil {
+				return "", E.Cause(resolveErr, "resolve peer endpoint ", peer.Address)
 			}
-			s += "\nendpoint=" + endpointAddr + ":" + format.ToString(peer.Port)
+			endpointAddr = resolvedAddr.String()
 		}
-		if peer.PersistentKeepaliveInterval != 0 {
-			s += "\npersistent_keepalive_interval=" + format.ToString(peer.PersistentKeepaliveInterval)
-		}
-		for _, allowedIp := range peer.AllowedIPs {
-			s += "\nallowed_ip=" + allowedIp.String()
-		}
+		s += "\nendpoint=" + endpointAddr + ":" + format.ToString(peer.Port)
+	}
+	if peer.PersistentKeepaliveInterval != 0 {
+		s += "\npersistent_keepalive_interval=" + format.ToString(peer.PersistentKeepaliveInterval)
+	}
+	for _, allowedIp := range peer.AllowedIPs {
+		s += "\nallowed_ip=" + allowedIp.String()
 	}
 	return s, nil
 }
@@ -280,7 +297,7 @@ func (e *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	metadata.InboundType = e.Type()
 	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
-	metadata.User = e.peerNames.Lookup(source.Addr) //H
+	metadata.User = e.peerNames.Load().Lookup(source.Addr) //H
 	metadata.Destination = destination
 	for _, addr := range e.address {
 		if addr.Contains(destination.Addr) {
@@ -345,7 +362,7 @@ func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.
 	metadata.InboundType = w.Type()
 	metadata.InboundOptions.SniffEnabled = true
 	metadata.Source = source
-	metadata.User = w.peerNames.Lookup(source.Addr) //H
+	metadata.User = w.peerNames.Load().Lookup(source.Addr) //H
 	for _, addr := range w.address {
 		if addr.Contains(destination.Addr) {
 			metadata.OriginDestination = destination

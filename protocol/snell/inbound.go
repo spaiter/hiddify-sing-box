@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -35,7 +36,7 @@ type Inbound struct {
 	logger   logger.ContextLogger
 	listener *listener.Listener
 	service  snellprotocol.Service
-	users    []option.SnellUser
+	users    atomic.Pointer[[]option.SnellUser] //H swapped by ReloadUsers
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.SnellInboundOptions) (adapter.Inbound, error) {
@@ -43,8 +44,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		Adapter: inbound.NewAdapter(C.TypeSnell, tag),
 		router:  uot.NewRouter(router, logger),
 		logger:  logger,
-		users:   options.Users,
 	}
+	inbound.users.Store(&options.Users)
 	var userList []int
 	var keyList [][]byte
 	if len(options.Users) > 0 {
@@ -167,13 +168,13 @@ func (h *Inbound) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 func (h *Inbound) newConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	metadata.Inbound = h.Tag()
 	metadata.InboundType = h.Type()
-	if len(h.users) > 0 {
+	if h.hasUsers() {
 		userIndex, loaded := auth.UserFromContext[int](ctx)
 		if !loaded {
 			N.CloseOnHandshakeFailure(conn, onClose, os.ErrInvalid)
 			return
 		}
-		user := h.users[userIndex].Name
+		user := h.userName(userIndex)
 		if user == "" {
 			user = F.ToString(userIndex)
 		} else {
@@ -189,13 +190,13 @@ func (h *Inbound) newConnection(ctx context.Context, conn net.Conn, metadata ada
 func (h *Inbound) newPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	metadata.Inbound = h.Tag()
 	metadata.InboundType = h.Type()
-	if len(h.users) > 0 {
+	if h.hasUsers() {
 		userIndex, loaded := auth.UserFromContext[int](ctx)
 		if !loaded {
 			N.CloseOnHandshakeFailure(conn, onClose, os.ErrInvalid)
 			return
 		}
-		user := h.users[userIndex].Name
+		user := h.userName(userIndex)
 		if user == "" {
 			user = F.ToString(userIndex)
 		} else {

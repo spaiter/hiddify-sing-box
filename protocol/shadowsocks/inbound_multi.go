@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -41,7 +42,7 @@ type MultiInbound struct {
 	logger   logger.ContextLogger
 	listener *listener.Listener
 	service  shadowsocks.MultiService[int]
-	users    []option.ShadowsocksUser
+	users    atomic.Pointer[[]option.ShadowsocksUser] //H swapped by ReloadUsers
 	tracker  adapter.SSMTracker
 	obfsMode string
 }
@@ -102,7 +103,7 @@ func newMultiInbound(ctx context.Context, router adapter.Router, logger log.Cont
 		}
 	}
 	inbound.service = service
-	inbound.users = options.Users
+	inbound.users.Store(&options.Users)
 	inbound.listener = listener.New(listener.Options{
 		Context:                  ctx,
 		Logger:                   logger,
@@ -137,11 +138,12 @@ func (h *MultiInbound) UpdateUsers(users []string, uPSKs []string) error {
 	if err != nil {
 		return err
 	}
-	h.users = common.Map(users, func(user string) option.ShadowsocksUser {
+	renamed := common.Map(users, func(user string) option.ShadowsocksUser {
 		return option.ShadowsocksUser{
 			Name: user,
 		}
 	})
+	h.users.Store(&renamed)
 	return nil
 }
 
@@ -177,7 +179,7 @@ func (h *MultiInbound) newConnection(ctx context.Context, conn net.Conn, metadat
 	if !loaded {
 		return os.ErrInvalid
 	}
-	user := h.users[userIndex].Name
+	user := h.userName(userIndex)
 	if user == "" {
 		user = F.ToString(userIndex)
 	} else {
@@ -200,7 +202,7 @@ func (h *MultiInbound) newPacketConnection(ctx context.Context, conn N.PacketCon
 	if !loaded {
 		return os.ErrInvalid
 	}
-	user := h.users[userIndex].Name
+	user := h.userName(userIndex)
 	if user == "" {
 		user = F.ToString(userIndex)
 	} else {

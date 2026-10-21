@@ -54,6 +54,8 @@ type Device struct {
 	logger    *device.Logger
 	ipcConfig string
 	path      *devicePath //H: MTU discovery and fallback addresses
+	// peerEndpoints maps a tunnel address to the peer's external address: see peer_endpoint.go //H
+	peerEndpoints peerEndpointCache //H
 }
 
 func NewDevice(ctx context.Context, logger logger.ContextLogger, dial network.Dialer, ipcConfig string, opts DeviceOpts) (*Device, error) {

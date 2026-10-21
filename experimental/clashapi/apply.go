@@ -94,21 +94,37 @@ func (s *Server) applyInbounds(logFactory log.Factory, applied, desired []option
 		have, exists := appliedByTag[want.Tag]
 		delete(appliedByTag, want.Tag)
 
+		create := func(entry option.Inbound) error {
+			// Same logger prefix box.go gives an inbound, so log lines stay
+			// indistinguishable from those of a normally started one.
+			return manager.Create(s.ctx, router,
+				logFactory.NewLogger(F.ToString("inbound/", entry.Type, "[", entry.Tag, "]")),
+				entry.Tag, entry.Type, entry.Options)
+		}
 		recreate := func() error {
+			existed := false
 			if _, loaded := manager.Get(want.Tag); loaded {
 				if err := manager.Remove(want.Tag); err != nil {
 					return E.Cause(err, "remove inbound ", want.Tag)
 				}
+				existed = true
 			}
-			// Same logger prefix box.go gives an inbound, so log lines stay
-			// indistinguishable from those of a normally started one.
-			err := manager.Create(s.ctx, router,
-				logFactory.NewLogger(F.ToString("inbound/", want.Type, "[", want.Tag, "]")),
-				want.Tag, want.Type, want.Options)
-			if err != nil {
-				return E.Cause(err, "create inbound ", want.Tag)
+			err := create(want)
+			if err == nil {
+				return nil
 			}
-			return nil
+			// The listener is already gone at this point, so leaving it at
+			// that would make a rejected config worse than the one we started
+			// from — the inbound would simply vanish until the next restart.
+			// Put the previous definition back and report both failures.
+			if existed {
+				if backErr := create(have); backErr != nil {
+					return E.Cause(err, "create inbound ", want.Tag,
+						" (rollback also failed: ", backErr, "; inbound is DOWN)")
+				}
+				s.logger.Warn("inbound ", want.Tag, ": rejected, rolled back to the previous definition")
+			}
+			return E.Cause(err, "create inbound ", want.Tag)
 		}
 
 		if !exists {
@@ -122,6 +138,16 @@ func (s *Server) applyInbounds(logFactory log.Factory, applied, desired []option
 		changed, usersOnly, err := diffOptions(s.ctx, have, want, "users")
 		if err != nil {
 			return nil, err
+		}
+		if _, live := manager.Get(want.Tag); !live {
+			// In the snapshot but not running: an earlier apply failed between
+			// Remove and Create. Comparing against the snapshot alone would
+			// call this "unchanged" and leave the inbound down forever.
+			if err := recreate(); err != nil {
+				return nil, err
+			}
+			outcome.Recreated = append(outcome.Recreated, want.Tag)
+			continue
 		}
 		if !changed {
 			continue
@@ -174,22 +200,36 @@ func (s *Server) applyEndpoints(logFactory log.Factory, applied, desired []optio
 		have, exists := appliedByTag[want.Tag]
 		delete(appliedByTag, want.Tag)
 
+		create := func(entry option.Endpoint) error {
+			// box.go tags the endpoint's context with its own outbound name;
+			// without it the endpoint cannot dial through itself.
+			endpointCtx := adapter.WithContext(s.ctx, &adapter.InboundContext{Outbound: entry.Tag})
+			return manager.Create(endpointCtx, router,
+				logFactory.NewLogger(F.ToString("endpoint/", entry.Type, "[", entry.Tag, "]")),
+				entry.Tag, entry.Type, entry.Options)
+		}
 		recreate := func() error {
+			existed := false
 			if _, loaded := manager.Get(want.Tag); loaded {
 				if err := manager.Remove(want.Tag); err != nil {
 					return E.Cause(err, "remove endpoint ", want.Tag)
 				}
+				existed = true
 			}
-			// box.go tags the endpoint's context with its own outbound name;
-			// without it the endpoint cannot dial through itself.
-			endpointCtx := adapter.WithContext(s.ctx, &adapter.InboundContext{Outbound: want.Tag})
-			err := manager.Create(endpointCtx, router,
-				logFactory.NewLogger(F.ToString("endpoint/", want.Type, "[", want.Tag, "]")),
-				want.Tag, want.Type, want.Options)
-			if err != nil {
-				return E.Cause(err, "create endpoint ", want.Tag)
+			err := create(want)
+			if err == nil {
+				return nil
 			}
-			return nil
+			// Same reasoning as for inbounds: a rejected config must not leave
+			// the endpoint torn down. Restore the previous definition.
+			if existed {
+				if backErr := create(have); backErr != nil {
+					return E.Cause(err, "create endpoint ", want.Tag,
+						" (rollback also failed: ", backErr, "; endpoint is DOWN)")
+				}
+				s.logger.Warn("endpoint ", want.Tag, ": rejected, rolled back to the previous definition")
+			}
+			return E.Cause(err, "create endpoint ", want.Tag)
 		}
 
 		if !exists {
@@ -203,6 +243,14 @@ func (s *Server) applyEndpoints(logFactory log.Factory, applied, desired []optio
 		changed, peersOnly, err := diffOptions(s.ctx, have, want, "peers")
 		if err != nil {
 			return nil, err
+		}
+		if _, live := manager.Get(want.Tag); !live {
+			// In the snapshot but not running — see the inbound path.
+			if err := recreate(); err != nil {
+				return nil, err
+			}
+			outcome.Recreated = append(outcome.Recreated, want.Tag)
+			continue
 		}
 		if !changed {
 			continue

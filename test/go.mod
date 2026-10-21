@@ -348,3 +348,7 @@ replace github.com/sagernet/gvisor => ../replace/gvisor
 replace github.com/sagernet/sing-mux => ../replace/sing-mux
 
 replace github.com/metacubex/utls => github.com/Leadaxe/utls-lx v1.8.8-0.20261011005638-ad69b191e2f8
+
+// Spaiter: the user set is swappable on a running service (UpdateUsers), so adding a user
+// does not tear the inbound down; upstream has no setter. //H
+replace github.com/sagernet/sing-shadowtls => ../replace/sing-shadowtls

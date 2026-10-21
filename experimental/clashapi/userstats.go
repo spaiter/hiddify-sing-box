@@ -71,10 +71,19 @@ func newUserStatsManager(logger log.Logger, dbPath string) (*UserStatsManager, e
 }
 
 func (m *UserStatsManager) Start() {
+	if m == nil { //H: not built when config_output_path is unwritable (sing-box check)
+		return //H
+	} //H
 	go m.flushLoop()
 }
 
 func (m *UserStatsManager) Close() error {
+	// A nil manager is a normal state, not a caller's mistake: the stats database lives beside
+	// config.json, so when that directory is not writable the manager is never built, yet the
+	// typed nil still sits in the clash server's closer list and common.Close reaches here. //H
+	if m == nil { //H
+		return nil //H
+	} //H
 	m.cancel()
 	<-m.done
 	m.flush()

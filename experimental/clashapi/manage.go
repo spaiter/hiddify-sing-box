@@ -18,6 +18,10 @@ func manageRouter(s *Server, logFactory log.Factory) http.Handler {
 	// Full config (read-only)
 	r.Get("/config", getFullConfig(s))
 
+	// Push the config file into the running instance. The CRUD routes below
+	// only rewrite the file; nothing takes effect until this is called. //H
+	r.Post("/apply", applyConfig(s, logFactory))
+
 	// Inbound CRUD
 	r.Get("/inbounds", listInbounds(s))
 	r.Post("/inbounds", addInbound(s))

@@ -17,13 +17,53 @@ type ConfigManager struct {
 	mu       sync.Mutex
 	ctx      context.Context
 	filePath string
+
+	// applied is the config as it was last pushed into the running instance.
+	// ModifyConfig only rewrites the file, so without this snapshot there is
+	// no way to tell which tags a later apply actually has to touch. It is
+	// captured at construction — i.e. while the file still matches what the
+	// instance was built from — because by the time anything calls apply the
+	// file has already been edited. //H
+	appliedMu  sync.Mutex
+	applied    option.Options
+	hasApplied bool
 }
 
 func NewConfigManager(ctx context.Context, filePath string) *ConfigManager {
-	return &ConfigManager{
+	m := &ConfigManager{
 		ctx:      ctx,
 		filePath: filePath,
 	}
+	if options, err := m.ReadConfig(); err == nil {
+		m.applied = options
+		m.hasApplied = true
+	}
+	return m
+}
+
+// Applied returns the config last pushed into the running instance. //H
+func (m *ConfigManager) Applied() (option.Options, error) {
+	m.appliedMu.Lock()
+	defer m.appliedMu.Unlock()
+	if !m.hasApplied {
+		// Construction-time read failed (unreadable or invalid file); the file
+		// as it stands now is the best available baseline.
+		options, err := m.ReadConfig()
+		if err != nil {
+			return option.Options{}, err
+		}
+		m.applied = options
+		m.hasApplied = true
+	}
+	return m.applied, nil
+}
+
+// SetApplied records the config now live in the instance. //H
+func (m *ConfigManager) SetApplied(options option.Options) {
+	m.appliedMu.Lock()
+	defer m.appliedMu.Unlock()
+	m.applied = options
+	m.hasApplied = true
 }
 
 func (m *ConfigManager) ReadConfig() (option.Options, error) {

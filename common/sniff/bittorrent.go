@@ -179,7 +179,99 @@ func UTP(_ context.Context, metadata *adapter.InboundContext, packet []byte) err
 
 // UDPTracker detects if the packet is a UDP Tracker Protocol packet with deep validation.
 // For the UDP Tracker Protocol specification, see https://www.bittorrent.org/beps/bep_0015.html
+// udpTrackerResponse detects the tracker-to-client side of BEP 15.
+//
+// UDPTracker below only recognises requests: connect by its magic constant,
+// announce and scrape by connection_id plus action. Responses have a different
+// layout with no magic and no connection_id, so half of a tracker exchange went
+// undetected -- measured as exactly 5 of 10 packets on
+// testdata/pcap/true-positive/own_udp_tracker_bep15.pcap.
+//
+// Detecting the response side matters because UDP has no connection to drop:
+// each datagram stands alone, so a missed request is simply missed. Catching
+// the reply still identifies the tracker and gets its address banned, which is
+// what stops further announces.
+//
+// The checks are deliberately strict, because the response signatures are
+// otherwise weak -- an announce response begins with four bytes 00 00 00 01 and
+// little else. Structural constraints carry the weight: the peer list length
+// must be an exact multiple of 6, and the interval and counters must be
+// plausible. The connect response is NOT detected at all: it is 16 bytes
+// starting with four zero bytes, which is far too generic to claim.
+//
+// This runs before UDPTracker's DNS exclusion on purpose. That exclusion reads
+// packet[4:6] as a DNS question count, but in an announce response those bytes
+// are the top half of a random transaction_id, so a legitimate response would
+// often be discarded as DNS.
+func udpTrackerResponse(metadata *adapter.InboundContext, packet []byte) bool {
+	if len(packet) < 8 {
+		return false
+	}
+	action := binary.BigEndian.Uint32(packet[0:4])
+
+	switch action {
+	case actionAnnounce:
+		// action | transaction_id | interval | leechers | seeders | peers*6
+		if len(packet) < 20 || (len(packet)-20)%6 != 0 {
+			return false
+		}
+		interval := binary.BigEndian.Uint32(packet[8:12])
+		if interval == 0 || interval > 86400 {
+			return false
+		}
+		leechers := binary.BigEndian.Uint32(packet[12:16])
+		seeders := binary.BigEndian.Uint32(packet[16:20])
+		if leechers > 1_000_000 || seeders > 1_000_000 {
+			return false
+		}
+		// A peer entry with a zero port is not a peer.
+		for off := 20; off+6 <= len(packet); off += 6 {
+			if binary.BigEndian.Uint16(packet[off+4:off+6]) == 0 {
+				return false
+			}
+		}
+		setBitTorrentProtocol(metadata, "udp-tracker-announce-response")
+		return true
+
+	case actionScrape:
+		// action | transaction_id | (complete | downloaded | incomplete)*n
+		if len(packet) < 20 || (len(packet)-8)%12 != 0 {
+			return false
+		}
+		for off := 8; off+12 <= len(packet); off += 12 {
+			for field := 0; field < 3; field++ {
+				at := off + field*4
+				if binary.BigEndian.Uint32(packet[at:at+4]) > 10_000_000 {
+					return false
+				}
+			}
+		}
+		setBitTorrentProtocol(metadata, "udp-tracker-scrape-response")
+		return true
+
+	case actionError:
+		// action | transaction_id | human-readable message
+		if len(packet) < 12 {
+			return false
+		}
+		for _, b := range packet[8:] {
+			if b != '\t' && b != '\n' && b != '\r' && (b < 0x20 || b > 0x7E) {
+				return false
+			}
+		}
+		setBitTorrentProtocol(metadata, "udp-tracker-error-response")
+		return true
+	}
+	return false
+}
+
 func UDPTracker(_ context.Context, metadata *adapter.InboundContext, packet []byte) error {
+	// Responses are checked first; see udpTrackerResponse for why the ordering
+	// matters against the DNS exclusion below.
+	if udpTrackerResponse(metadata, packet) {
+		return nil
+	}
+
 	if len(packet) < minSizeConnect {
 		return os.ErrInvalid
 	}

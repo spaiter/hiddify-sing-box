@@ -273,7 +273,7 @@ func TestBitTorrentCorpusTruePositive(t *testing.T) {
 		{"own_plaintext_bep6_bep10.pcap", 50.0, 400, "measured 62.00%"},
 		{"own_utp_bep29.pcap", 45.0, 600, "measured 53.50%"},
 		{"own_ipv6_peer.pcap", 55.0, 600, "measured 64.83%"},
-		{"own_udp_tracker_bep15.pcap", 40.0, 0, "measured 50%: the connect request carries the magic, the responses do not"},
+		{"own_udp_tracker_bep15.pcap", 80.0, 0, "measured 90%; the one miss is the 16-byte connect response, see udpTrackerResponse"},
 		{"bittorrent.pcap", 50.0, 200, "measured 54.50%"},
 		{"bittorrent_utp.pcap", 80.0, 100, "measured 89.13%"},
 		{"suricata-dht.pcap", 80.0, 50, "measured 100%"},

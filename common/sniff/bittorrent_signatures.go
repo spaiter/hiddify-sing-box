@@ -7,6 +7,7 @@ const (
 	actionConnect  = 0
 	actionAnnounce = 1
 	actionScrape   = 2
+	actionError    = 3 // BEP 15 error response
 
 	minSizeConnect  = 16
 	minSizeScrape   = 36

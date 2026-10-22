@@ -46,7 +46,6 @@ func btStreamSniffers() []sniff.StreamSniffer {
 		sniff.BitTorrentExtended,
 		sniff.BitTorrentHTTP,
 		sniff.BitTorrentSignature,
-		sniff.BitTorrentMSE,
 	}
 }
 
@@ -298,7 +297,7 @@ func TestBitTorrentCorpusTruePositive(t *testing.T) {
 		{"tls_torrent.pcapng", 0.0, 50, "TLS-wrapped: 0% is correct, not a defect"},
 		{"ustc_bittorrent.pcap", 0.0, 500, "TLS-wrapped research corpus"},
 
-		// See TestBitTorrentMSEIsInert for why these two are zero.
+		// See TestMSETrafficRemainsUndetected for why these three are zero.
 		{"own_mse_handshake.pcap", 0.0, 400, "MSE handshake, ours"},
 		{"own_mid_transfer.pcap", 0.0, 1200, "steady-state MSE traffic, ours"},
 		{"own_mse_many_flows.pcap", 5.0, 0, "measured 5.83%: exactly its plaintext flows, none of the 126 MSE ones"},
@@ -425,50 +424,60 @@ func TestBitTorrentCorpusFalsePositive(t *testing.T) {
 
 // --------------------------------------------------------------------- MSE
 
-// TestBitTorrentMSEIsInert pins the measured fact that BitTorrentMSE never
-// fires, so that nobody "fixes" it by relaxing a threshold without reading
-// why. The full measurement is in testdata/pcap/NOTICE.md; in short:
+// TestMSETrafficRemainsUndetected records that MSE-encrypted BitTorrent is not
+// detected, and that this is a known gap rather than an accident.
 //
-//   - Its VC scan looks for 8 plaintext zero bytes, but MSE sends the
-//     Verification Constant encrypted. 0 of 126 real MSE flows contain it.
-//   - Its entropy gate is unreachable anyway: >6.5 over a 96-byte window needs
-//     92 of 96 bytes distinct, while random data yields about 80.
-//   - Relaxing it does not help. Every gate that catches all 126 MSE flows
-//     also flags 16-19 captures in the false-positive corpus, consistently
-//     ethereum, kerberos, zabbix and telegram_videocall, because those open
-//     with cryptographic random material too.
+// BitTorrentMSE was removed on 2026-10-22. It had never fired, and not because
+// a threshold needed loosening: the function was self-contradictory. Phases 1
+// and 2 required near-random data -- at least 92 distinct bytes out of 96 and
+// Shannon entropy above 6.5 -- while phase 3 then required a run of eight zero
+// bytes in the following ~530. Random data contains such a run with
+// probability about 2.9e-17, so the two halves could never hold at once.
+// Measured on own_mse_many_flows.pcap it fired on 0 of 284 encrypted payloads,
+// and across 20000 random 96-byte windows the best observed were 91 distinct
+// bytes and 6.481 entropy, both short of the gate.
 //
-// If this test starts failing, MSE detection began working and the thresholds
-// in TestBitTorrentCorpusTruePositive should be raised to match.
-func TestBitTorrentMSEIsInert(t *testing.T) {
+// Loosening it was measured and rejected: every variant that caught all 126
+// real MSE flows also flagged 16-19 captures in the false-positive corpus,
+// consistently ethereum, kerberos, zabbix and telegram_videocall, which also
+// open with cryptographic random material. nDPI does not attempt MSE detection
+// either; it has a generic fully-encrypted heuristic that reports a flow risk,
+// runs only on traffic no dissector claimed, and is opt-in. See
+// testdata/pcap/NOTICE.md.
+//
+// This test keeps the gap visible. If MSE detection is ever implemented these
+// fixtures will score above zero and it will fail, which is the point to raise
+// the thresholds in TestBitTorrentCorpusTruePositive and update the notice.
+func TestMSETrafficRemainsUndetected(t *testing.T) {
 	t.Parallel()
 	dir := corpusDir(t, "true-positive")
 
-	ctx := context.Background()
-	packets, err := readCapture(filepath.Join(dir, "own_mse_many_flows.pcap"))
+	for _, name := range []string{"own_mse_handshake.pcap", "own_mid_transfer.pcap"} {
+		analysed, detected, _, err := sniffCapture(filepath.Join(dir, name), 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if analysed == 0 {
+			t.Fatalf("%s: nothing parsed", name)
+		}
+		t.Logf("%s: %d/%d detected", name, detected, analysed)
+		if detected != 0 {
+			t.Errorf("%s: %d of %d packets detected, but MSE detection is not "+
+				"implemented. If that changed deliberately, raise the "+
+				"thresholds and update NOTICE.md", name, detected, analysed)
+		}
+	}
+
+	// The mixed fixture must still detect its plaintext flows, so this test
+	// cannot pass merely because the sniffers stopped working altogether.
+	analysed, detected, _, err := sniffCapture(filepath.Join(dir, "own_mse_many_flows.pcap"), 0)
 	if err != nil {
-		t.Fatalf("read fixture: %v", err)
+		t.Fatalf("own_mse_many_flows.pcap: %v", err)
 	}
-	var flows, fired int
-	for _, pkt := range packets {
-		if pkt.isUDP || bytes.Contains(pkt.payload, []byte("BitTorrent protocol")) {
-			continue
-		}
-		flows++
-		metadata := &adapter.InboundContext{Destination: pkt.dest}
-		if sniff.BitTorrentMSE(ctx, metadata, bytes.NewReader(pkt.payload)) == nil {
-			fired++
-		}
-	}
-	if flows == 0 {
-		t.Fatal("no encrypted payloads found; fixture is wrong")
-	}
-	t.Logf("BitTorrentMSE fired on %d of %d encrypted payloads", fired, flows)
-	if fired != 0 {
-		t.Errorf("BitTorrentMSE fired %d times; it was measured as inert. "+
-			"If this is a deliberate improvement, re-measure against the "+
-			"false-positive corpus and update NOTICE.md and the thresholds",
-			fired)
+	t.Logf("own_mse_many_flows.pcap: %d/%d detected (its plaintext subset)", detected, analysed)
+	if detected == 0 {
+		t.Error("own_mse_many_flows.pcap detected nothing at all; it contains 25 " +
+			"plaintext handshakes that must still be caught")
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"math"
 	"net/netip"
 	"os"
 
@@ -458,77 +457,6 @@ func BitTorrentSignaturePacket(_ context.Context, metadata *adapter.InboundConte
 	return os.ErrInvalid
 }
 
-// BitTorrentMSE detects Message Stream Encryption (MSE/PE) handshakes in TCP streams.
-func BitTorrentMSE(_ context.Context, metadata *adapter.InboundContext, reader io.Reader) error {
-	// MSE minimum: 96-byte DH key + VC (8 bytes) + crypto field (4 bytes) = 108
-	var buf [628]byte
-	n, _ := io.ReadFull(reader, buf[:108])
-	if n < 108 {
-		return os.ErrInvalid
-	}
-
-	// Read more data if available (up to 628 bytes for padding scan)
-	if n == 108 {
-		extra, _ := reader.Read(buf[108:])
-		n += extra
-	}
-
-	payload := buf[:n]
-
-	// Phase 1: Distinct-byte pre-check
-	var seen [256]bool
-	distinct := 0
-	for _, b := range payload[:96] {
-		if !seen[b] {
-			seen[b] = true
-			distinct++
-		}
-	}
-	if distinct < 92 {
-		return os.ErrInvalid
-	}
-
-	// Phase 2: Shannon entropy check — DH public keys should have high entropy (> 6.5)
-	if shannonEntropy(payload[0:96]) <= 6.5 {
-		return os.ErrInvalid
-	}
-
-	// Phase 3: VC scan — look for 8 consecutive zero bytes
-	searchEnd := n
-	if searchEnd > 628 {
-		searchEnd = 628
-	}
-
-	vcPosition := -1
-	zeroRun := 0
-	for i := 96; i < searchEnd; i++ {
-		if payload[i] == 0 {
-			zeroRun++
-			if zeroRun == 8 {
-				vcPosition = i - 7
-				break
-			}
-		} else {
-			zeroRun = 0
-		}
-	}
-	if vcPosition < 0 {
-		return os.ErrInvalid
-	}
-
-	// Phase 4: crypto field check — valid values: 0x01 (plaintext) or 0x02 (RC4)
-	if n < vcPosition+12 {
-		return os.ErrInvalid
-	}
-	cryptoBytes := binary.BigEndian.Uint32(payload[vcPosition+8 : vcPosition+12])
-	if cryptoBytes > 0 && cryptoBytes <= 0x03 {
-		setBitTorrentProtocol(metadata, "mse")
-		return nil
-	}
-
-	return os.ErrInvalid
-}
-
 // BitTorrentMessage detects BitTorrent TCP message structure (length-prefixed messages).
 func BitTorrentMessage(_ context.Context, metadata *adapter.InboundContext, reader io.Reader) error {
 	var header [53]byte
@@ -618,26 +546,6 @@ func BitTorrentSignature(_ context.Context, metadata *adapter.InboundContext, re
 }
 
 // --- Helper functions ---
-
-// shannonEntropy calculates the Shannon entropy of data.
-func shannonEntropy(data []byte) float64 {
-	if len(data) == 0 {
-		return 0
-	}
-	var freq [256]int
-	for _, b := range data {
-		freq[b]++
-	}
-	entropy := 0.0
-	total := float64(len(data))
-	for _, count := range freq {
-		if count > 0 {
-			p := float64(count) / total
-			entropy -= p * math.Log2(p)
-		}
-	}
-	return entropy
-}
 
 // countTrailingZeroBytes counts trailing zero bytes in a byte slice.
 func countTrailingZeroBytes(data []byte) int {

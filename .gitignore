@@ -29,3 +29,10 @@ AGENTS.md
 # local build artifacts
 /sing-box-static
 /sing-box-new
+
+# Python bytecode from the pcap fixture tooling
+__pycache__/
+*.pyc
+
+# Local pre-migration backups (snell, awg3): keep out of the fork
+*.bak-*

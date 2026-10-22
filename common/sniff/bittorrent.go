@@ -123,23 +123,28 @@ func UTP(_ context.Context, metadata *adapter.InboundContext, packet []byte) err
 		}
 	}
 
-	// Reject VoIP/messaging protocols based on timestamp_diff patterns
+	// Sanity-bound the timestamp difference. A uTP peer reports the measured
+	// one-way delay here, so a value of half an hour in microseconds is not a
+	// real measurement.
+	//
+	// There used to be two further rules in this block, rejecting a packet when
+	// timestamp_difference_microseconds contained three or four zero bytes, on
+	// the theory that VoIP and messaging protocols would show that pattern.
+	// They were removed on 2026-10-22: that field is legitimately zero in uTP,
+	// both on the first packets of a connection and whenever no delay sample
+	// has been taken yet, so the rules punished the protocol they were meant to
+	// identify. Measured on own_utp_bep29.pcap they rejected 279 of 600
+	// genuine uTP packets -- detection went from 53.50% to 100.00% once they
+	// were gone.
+	//
+	// Nothing was lost by removing them. The false-positive corpus stayed at
+	// 648 clean captures of 649 parseable, and that corpus contains
+	// telegram_videocall, telegram_voice, zoom, teams, webex, discord_call,
+	// whatsapp and wa_voice: the VoIP traffic those rules were aimed at is
+	// already rejected by the STUN magic-cookie, classic-STUN and DTLS checks
+	// above, which is what VoIP actually looks like on the wire.
 	if typ == 0 || typ == 1 {
-		timestampDiff := binary.BigEndian.Uint32(packet[8:12])
-
-		zeroCount := 0
-		for _, b := range packet[8:12] {
-			if b == 0 {
-				zeroCount++
-			}
-		}
-		if len(packet) >= 200 && zeroCount >= 3 {
-			return os.ErrInvalid
-		}
-		if len(packet) >= 100 && zeroCount == 4 {
-			return os.ErrInvalid
-		}
-		if timestampDiff > 2000000000 {
+		if binary.BigEndian.Uint32(packet[8:12]) > 2000000000 {
 			return os.ErrInvalid
 		}
 	}

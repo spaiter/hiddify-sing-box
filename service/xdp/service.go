@@ -104,7 +104,7 @@ func (s *Service) closeFilters() {
 	s.filters = nil
 }
 
-func (s *Service) BlockIP(ip netip.Addr, duration time.Duration) error {
+func (s *Service) BlockIP(ip netip.Addr, duration time.Duration, user string) error {
 	if duration == 0 {
 		duration = s.banDuration
 	}
@@ -121,7 +121,12 @@ func (s *Service) BlockIP(ip netip.Addr, duration time.Duration) error {
 		return firstErr
 	}
 	if s.logBlocked {
-		s.logger.Info("XDP blocked ", ip, " for ", duration, " (total: ", s.BlockedCount(), ")")
+		// user= is parsed by the Grafana exporter; keep the field present even
+		// when unknown so the format stays uniform. //H
+		if user == "" {
+			user = "-"
+		}
+		s.logger.Info("XDP blocked ", ip, " user=", user, " for ", duration, " (total: ", s.BlockedCount(), ")")
 	}
 	return nil
 }
@@ -194,7 +199,7 @@ func (s *Service) BlockUserIPs(user string, duration time.Duration) error {
 
 	var firstErr error
 	for _, ip := range ipList {
-		if err := s.BlockIP(ip, duration); err != nil && firstErr == nil {
+		if err := s.BlockIP(ip, duration, user); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

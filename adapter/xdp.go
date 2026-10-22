@@ -6,7 +6,10 @@ import (
 )
 
 type XDPBlocker interface {
-	BlockIP(ip netip.Addr, duration time.Duration) error
+	// user is the account the blocked traffic was attributed to, empty
+	// when the inbound could not name it. Carried through so the block
+	// can be reported per user, not just per address. //H
+	BlockIP(ip netip.Addr, duration time.Duration, user string) error
 	UnblockIP(ip netip.Addr) error
 	IsBlocked(ip netip.Addr) bool
 	BlockedCount() int

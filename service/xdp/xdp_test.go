@@ -27,8 +27,8 @@ func createTestMap(t *testing.T) *ebpf.Map {
 	t.Helper()
 	spec := &ebpf.MapSpec{
 		Type:       ebpf.Hash,
-		KeySize:    4,    // __u32 IPv4 addr
-		ValueSize:  8,    // __u64 expiration timestamp
+		KeySize:    4, // __u32 IPv4 addr
+		ValueSize:  8, // __u64 expiration timestamp
 		MaxEntries: 1000,
 	}
 	m, err := ebpf.NewMap(spec)
@@ -42,8 +42,8 @@ func createTestMapV6(t *testing.T) *ebpf.Map {
 	t.Helper()
 	spec := &ebpf.MapSpec{
 		Type:       ebpf.Hash,
-		KeySize:    16,   // [16]byte IPv6 addr
-		ValueSize:  8,    // __u64 expiration timestamp
+		KeySize:    16, // [16]byte IPv6 addr
+		ValueSize:  8,  // __u64 expiration timestamp
 		MaxEntries: 1000,
 	}
 	m, err := ebpf.NewMap(spec)
@@ -403,7 +403,7 @@ func TestService_BlockUnblock(t *testing.T) {
 
 	ip := netip.MustParseAddr("198.51.100.1")
 
-	require.NoError(t, s.BlockIP(ip, 10*time.Minute))
+	require.NoError(t, s.BlockIP(ip, 10*time.Minute, ""))
 	assert.True(t, s.IsBlocked(ip))
 	assert.Equal(t, 1, s.BlockedCount())
 
@@ -425,7 +425,7 @@ func TestService_IPv6_BlockUnblock(t *testing.T) {
 
 	ip6 := netip.MustParseAddr("2001:db8::1")
 
-	require.NoError(t, s.BlockIP(ip6, 10*time.Minute))
+	require.NoError(t, s.BlockIP(ip6, 10*time.Minute, ""))
 	assert.True(t, s.IsBlocked(ip6))
 	assert.Equal(t, 1, s.BlockedCount())
 
@@ -448,8 +448,8 @@ func TestService_MixedV4V6_BlockUnblock(t *testing.T) {
 	ip4 := netip.MustParseAddr("198.51.100.50")
 	ip6 := netip.MustParseAddr("2001:db8::50")
 
-	require.NoError(t, s.BlockIP(ip4, 10*time.Minute))
-	require.NoError(t, s.BlockIP(ip6, 10*time.Minute))
+	require.NoError(t, s.BlockIP(ip4, 10*time.Minute, ""))
+	require.NoError(t, s.BlockIP(ip6, 10*time.Minute, ""))
 	assert.True(t, s.IsBlocked(ip4))
 	assert.True(t, s.IsBlocked(ip6))
 	assert.Equal(t, 2, s.BlockedCount())
@@ -475,7 +475,7 @@ func TestService_DefaultBanDuration(t *testing.T) {
 	ip := netip.MustParseAddr("203.0.113.1")
 
 	// duration=0 should use the service default (5h)
-	require.NoError(t, s.BlockIP(ip, 0))
+	require.NoError(t, s.BlockIP(ip, 0, ""))
 	assert.True(t, s.IsBlocked(ip))
 }
 
@@ -624,7 +624,7 @@ func TestService_BlockUserIPs_CrossBlock(t *testing.T) {
 	s.TrackUserIP("bob", bobV4)
 
 	// Simulate: BT detected on alice's IPv4 → block source IP + cross-block all alice IPs
-	require.NoError(t, s.BlockIP(aliceV4, 10*time.Minute))
+	require.NoError(t, s.BlockIP(aliceV4, 10*time.Minute, ""))
 	require.NoError(t, s.BlockUserIPs("alice", 10*time.Minute))
 
 	// Alice's both IPs should be blocked

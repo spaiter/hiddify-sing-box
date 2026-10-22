@@ -49,7 +49,7 @@ func (r *Router) xdpBlockIfBitTorrent(action *R.RuleActionReject, metadata adapt
 	if !ok {
 		return
 	}
-	blocker.BlockIP(target, dur)
+	blocker.BlockIP(target, dur, metadata.User)
 	// Block every known IP of the user so BitTorrent can't continue over the
 	// other address family (dual-stack bypass). //H
 	if metadata.User != "" {

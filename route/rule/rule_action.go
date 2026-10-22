@@ -540,7 +540,6 @@ func (r *RuleActionSniff) build() error {
 			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentExtended)
 			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentHTTP)
 			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentSignature)
-			r.StreamSniffers = append(r.StreamSniffers, sniff.BitTorrentMSE)
 			// Packet sniffers (UDP)
 			r.PacketSniffers = append(r.PacketSniffers, sniff.UTP)
 			r.PacketSniffers = append(r.PacketSniffers, sniff.UDPTracker)

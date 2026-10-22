@@ -331,12 +331,24 @@ false-positive corpus -- consistently `ethereum`, `kerberos`, `zabbix` and
 from 19 captures to 16, because those protocols also open with cryptographic
 random material. No threshold separates them, with or without flow context.
 
-The detector measures **8.09%** on this fixture, which is exactly its 25
-plaintext flows and none of the 126 encrypted ones. The full measurement is
-recorded in the source above `CheckMSEEncryption`'s Phase 3 so nobody
-re-derives it, and `verify-fixtures.py` asserts that no plaintext Verification
-Constant exists anywhere in the fixture -- the premise the detector's VC scan
-depends on.
+The detector measures **5.83%** on this fixture, which is exactly its 25
+plaintext flows and none of the 126 encrypted ones.
+
+**`BitTorrentMSE` was removed on 2026-10-22.** The deciding argument was not
+that its thresholds were mis-tuned but that the function was self-contradictory:
+phases 1 and 2 demanded near-random data (92 of 96 bytes distinct, entropy
+above 6.5) while phase 3 then demanded a run of eight zero bytes in the
+following ~530, which random data contains with probability about 2.9e-17. The
+two halves could never hold at the same time, so no threshold existed that
+would have made it work. `shannonEntropy` went with it, having had no other
+caller.
+
+Removing it changed no measurement: every fixture rate is byte-identical, and
+`verify-fixtures.py` still asserts that no plaintext Verification Constant
+appears anywhere in the fixture -- the premise the scan had depended on.
+`TestMSETrafficRemainsUndetected` now records the gap instead, and will fail if
+MSE detection is ever implemented, which is the moment to raise the thresholds
+here.
 
 ## Rule for adding captures
 

@@ -102,3 +102,40 @@ type OnDemandRuleIterator interface {
 	Next() OnDemandRule
 	HasNext() bool
 }
+
+// BridgeOptions and BridgeSession are libbox-local, gomobile-safe mirrors of
+// adapter.BridgeOptions and adapter.BridgeSession.
+//
+// They were removed by bf92faff ("feat(libbox): wire RoutedFlow, WARP/MASQUE
+// cache slots, and shell/bridge stubs") while bridge_service_linux.go and
+// bridge_stub.go kept using them, which left `go build ./...` broken on linux
+// from 2026-07-11 onwards. It went unnoticed because the server binary is
+// built from cmd/sing-box, which does not import libbox.
+//
+// They cannot simply be replaced by the adapter types: gomobile cannot export
+// netip.Addr or plain int across the language boundary, so the bridge ports are
+// strings to be parsed on this side and the widths are fixed at int32. That is
+// exactly what bridge_service_linux.go expects -- string ports it parses with
+// netip.ParseAddr, and FileDescriptor() returning int32.
+//
+// Note that bridge_service_darwin.go was migrated to the adapter types instead,
+// so the two platforms currently expose different signatures for
+// NewBridgeService. Only linux (and Android, which carries the linux build tag)
+// is built here, so that inconsistency is left alone rather than fixed blind.
+type BridgeOptions struct {
+	BridgeName string
+	MTU        int32
+	Inet4Port  string
+	Inet6Port  string
+	Interface  string
+	RuleIndex  int32
+	RouteTable int32
+}
+
+type BridgeSession interface {
+	FileDescriptor() int32
+	Name() string
+	Inet6Active() bool
+	SetEgress(interfaceName string) error
+	Close() error
+}

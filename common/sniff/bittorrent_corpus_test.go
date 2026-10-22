@@ -9,6 +9,9 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +19,10 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/sniff"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/route/rule"
+	"github.com/sagernet/sing/common/json/badoption"
+	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -502,4 +509,78 @@ func TestBitTorrentMessageRejectsShortBitfield(t *testing.T) {
 		bytes.NewReader(genuine)); err != nil {
 		t.Errorf("a bitfield that exactly fills the segment was rejected: %v", err)
 	}
+}
+
+// TestSnifferListsMatchProduction guards the one assumption the corpus tests
+// rest on: that btStreamSniffers and btPacketSniffers above are the same set
+// the router installs for sniffer name "bittorrent".
+//
+// Those lists are copies. Without this check, adding a sniffer to
+// RuleActionSniff.build() would leave the corpus silently not covering it --
+// every test would still pass, while the new detector went unexercised against
+// 650 captures. That is the same class of failure as the pcap reader that used
+// to skip the whole sweep on one malformed file: a green test that checks less
+// than it appears to.
+//
+// The comparison goes through NewRuleAction rather than re-reading the source,
+// so it exercises the real expansion. Go cannot compare function values, so the
+// identity used is the code pointer from reflect.
+func TestSnifferListsMatchProduction(t *testing.T) {
+	t.Parallel()
+
+	action, err := rule.NewRuleAction(context.Background(), logger.NOP(), option.RuleAction{
+		Action: C.RuleActionTypeSniff,
+		SniffOptions: option.RouteActionSniff{
+			Sniffer: badoption.Listable[string]{C.ProtocolBitTorrent},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build sniff action: %v", err)
+	}
+	sniffAction, ok := action.(*rule.RuleActionSniff)
+	if !ok {
+		t.Fatalf("unexpected action type %T", action)
+	}
+
+	streamNames := func(fns []sniff.StreamSniffer) []string {
+		out := make([]string, 0, len(fns))
+		for _, fn := range fns {
+			out = append(out, funcName(reflect.ValueOf(fn).Pointer()))
+		}
+		sort.Strings(out)
+		return out
+	}
+	packetNames := func(fns []sniff.PacketSniffer) []string {
+		out := make([]string, 0, len(fns))
+		for _, fn := range fns {
+			out = append(out, funcName(reflect.ValueOf(fn).Pointer()))
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	if got, want := streamNames(sniffAction.StreamSniffers), streamNames(btStreamSniffers()); !slices.Equal(got, want) {
+		t.Errorf("stream sniffer drift.\n  production: %v\n  test list:  %v\n"+
+			"Update btStreamSniffers in this file, then decide what fixture "+
+			"covers the new detector.", got, want)
+	}
+	if got, want := packetNames(sniffAction.PacketSniffers), packetNames(btPacketSniffers()); !slices.Equal(got, want) {
+		t.Errorf("packet sniffer drift.\n  production: %v\n  test list:  %v\n"+
+			"Update btPacketSniffers in this file, then decide what fixture "+
+			"covers the new detector.", got, want)
+	}
+	t.Logf("in sync: %d stream, %d packet sniffers",
+		len(sniffAction.StreamSniffers), len(sniffAction.PacketSniffers))
+}
+
+func funcName(pc uintptr) string {
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return "unknown"
+	}
+	name := fn.Name()
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		name = name[i+1:]
+	}
+	return name
 }

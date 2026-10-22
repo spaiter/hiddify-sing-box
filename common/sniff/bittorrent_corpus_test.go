@@ -277,11 +277,11 @@ func TestBitTorrentCorpusTruePositive(t *testing.T) {
 		{"bittorrent.pcap", 50.0, 200, "measured 54.50%"},
 		{"bittorrent_utp.pcap", 80.0, 100, "measured 89.13%"},
 		{"suricata-dht.pcap", 80.0, 50, "measured 100%"},
-		{"zeek_tracker.pcap", 40.0, 100, "measured 50.00%"},
+		{"zeek_tracker.pcap", 40.0, 100, "measured 50.00%, which is the ceiling: see zeek_tracker note below"},
 		{"bt_search.pcap", 80.0, 50, "measured 100%"},
 		{"targusdataspeed_dht.pcap", 80.0, 50, "measured 100%, DHT on port 5200"},
 		{"torrent-dht.pcap", 80.0, 100, "measured 100%"},
-		{"bt-http.pcapng", 50.0, 50, "measured 66.67% here; the library measured 100% with a different detector set"},
+		{"bt-http.pcapng", 60.0, 50, "measured 66.67%, which is the ceiling: see bt-http note below"},
 
 		// Rates that are legitimately low, recorded so a future improvement is
 		// visible rather than mistaken for a regression.
@@ -324,6 +324,33 @@ func TestBitTorrentCorpusTruePositive(t *testing.T) {
 		})
 	}
 }
+
+// Two of the rates above look like detection gaps and are not. Both were
+// investigated on 2026-10-22 and both are ceilings, recorded here so nobody
+// spends time chasing them:
+//
+//   bt-http.pcapng (66.67%, 2 of 3)
+//     The undetected packet is literally two zero bytes of TCP payload from
+//     port 80. There is nothing in it to identify. The two packets that carry
+//     anything -- the GET /announce?info_hash=... request and the 307 redirect
+//     whose Location repeats the info_hash -- are both detected.
+//
+//   zeek_tracker.pcap (50%, 1 of 2)
+//     The undetected packet is the tracker's response, and it is gzip-compressed
+//     (Content-Encoding: gzip, body starts 1f8b0800). The bencode is inside the
+//     archive: "5:peers" and "8:complete" appear only after inflating it, and no
+//     plaintext marker exists on the wire.
+//
+//     Decompressing in the sniffer is not worth it, and the reason is not
+//     difficulty: the code would never run in production. sing-box sniffs the
+//     first packets of an outbound connection, which is the client's request --
+//     always detected here -- and does not separately sniff the server's reply
+//     on that connection. Inflating untrusted bytes in a VPN core's hot path
+//     would also be a decompression-bomb vector for no operational gain.
+//
+// The contrast with the uTP finding is the point: a low number is sometimes a
+// bug and sometimes the honest answer, and the only way to tell is to look at
+// the packets.
 
 // ------------------------------------------------------------- false positive
 

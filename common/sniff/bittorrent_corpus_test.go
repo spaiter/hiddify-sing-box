@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"os"
@@ -347,24 +348,6 @@ func TestBitTorrentCorpusFalsePositive(t *testing.T) {
 		// it under a name about IPv6 caches, and the standalone
 		// BitTorrentBlocker project documented the same 18 detections.
 		"lru_ipv6_caches.pcapng": "capture genuinely contains BitTorrent DHT on port 6881",
-
-		// A real false positive, kept visible rather than silenced.
-		//
-		// One packet in 911 of plain HTTP video delivery (port 80 -> client)
-		// matches checkBitTorrentMessage's Bitfield branch: payload
-		// 000000030546063b... parses as msgLen=3, msgID=5, and case 0x05 only
-		// requires 1 < msgLen <= 65536. That is a 4-byte small integer
-		// followed by one byte equal to 0x05 -- weak enough that arbitrary
-		// binary traffic hits it occasionally.
-		//
-		// In production this costs more than a log line: the reject rule drops
-		// the connection and XDP-bans the peer IP for a minute, so a CDN
-		// address serving video stalls. A real Bitfield only follows a
-		// handshake on an established peer connection, which is the condition
-		// that cannot be expressed without flow state. Tightening it is a
-		// change to live detection logic and is deliberately not bundled with
-		// this migration.
-		"netflix.pcap": "1/911 packets: checkBitTorrentMessage Bitfield branch is too permissive",
 	}
 
 	var captures, clean, unparseable int
@@ -452,5 +435,44 @@ func TestBitTorrentMSEIsInert(t *testing.T) {
 			"If this is a deliberate improvement, re-measure against the "+
 			"false-positive corpus and update NOTICE.md and the thresholds",
 			fired)
+	}
+}
+
+// TestBitTorrentMessageRejectsShortBitfield is a regression test for the one
+// false positive the corpus sweep found in production logic.
+//
+// These bytes are a real packet from testdata/pcap/false-positive/netflix.pcap:
+// plain HTTP video delivery from port 80, one of 911 packets in that capture.
+// They parse as msgLen=3, msgID=5, which the Bitfield branch used to accept on
+// nothing more than "small length, fifth byte is 0x05" -- its own guards only
+// covered msgLen 8..12 and msgLen > 40. In production that meant a dropped
+// connection and a one-minute XDP ban on a CDN address.
+//
+// What rejects it now is the chain check: the bitfield ends at offset 7 and the
+// following four bytes are 0x3b000000, a length of ~989 MB, so the stream does
+// not continue as BitTorrent.
+func TestBitTorrentMessageRejectsShortBitfield(t *testing.T) {
+	t.Parallel()
+
+	payload, err := hex.DecodeString(
+		"000000030546063b0000000002e5a4080101010000000306")
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	var metadata adapter.InboundContext
+	if err := sniff.BitTorrentMessage(context.Background(), &metadata,
+		bytes.NewReader(payload)); err == nil {
+		t.Errorf("HTTP video payload accepted as a BitTorrent Bitfield message; "+
+			"detector %q", metadata.SniffDetector)
+	}
+
+	// A genuine bitfield whose message fills the segment exactly must still be
+	// accepted, so the fix is not simply refusing short bitfields.
+	genuine := []byte{0x00, 0x00, 0x00, 0x03, 0x05, 0xF0, 0x0F}
+	metadata = adapter.InboundContext{}
+	if err := sniff.BitTorrentMessage(context.Background(), &metadata,
+		bytes.NewReader(genuine)); err != nil {
+		t.Errorf("a bitfield that exactly fills the segment was rejected: %v", err)
 	}
 }

@@ -760,6 +760,47 @@ func checkHTTPBitTorrent(payload []byte) bool {
 }
 
 // checkBitTorrentMessage detects BitTorrent TCP messages by structure.
+// messageChainPlausible reports whether the bytes after a BitTorrent message
+// ending at offset end continue to look like a BitTorrent stream.
+//
+// Peer-wire messages are length-prefixed and chained, so in a real session a
+// message is followed by the end of the segment or by another well-formed
+// message. Arbitrary binary data almost never produces two valid frames in a
+// row, which makes this a cheap discriminator for the branches whose own
+// length check is too permissive to stand alone.
+//
+// It is deliberately generous about truncation: TCP segmentation can cut a
+// message anywhere, so fewer than four trailing bytes is accepted rather than
+// treated as malformed.
+func messageChainPlausible(payload []byte, end int) bool {
+	if end < 0 || end > len(payload) {
+		return false
+	}
+	rest := payload[end:]
+	switch {
+	case len(rest) == 0:
+		return true // the message exactly fills the segment
+	case len(rest) < 4:
+		return true // next length prefix was split across segments
+	}
+
+	nextLen := binary.BigEndian.Uint32(rest[:4])
+	if nextLen == 0 {
+		return true // keep-alive, which is a valid next frame
+	}
+	if nextLen > 262144 {
+		return false
+	}
+	if len(rest) >= 5 {
+		// Message ids above the BitTorrent v2 hash range are not part of any
+		// BEP this sniffer claims to understand.
+		if rest[4] > 23 {
+			return false
+		}
+	}
+	return true
+}
+
 func checkBitTorrentMessage(payload []byte) bool {
 	if len(payload) < 5 {
 		return false
@@ -839,7 +880,15 @@ func checkBitTorrentMessage(payload []byte) bool {
 				return false
 			}
 		}
-		return true
+		// The guards above only cover msgLen 8..12 and msgLen > 40, so a short
+		// bitfield was accepted on nothing more than "first four bytes are a
+		// small integer and the fifth is 0x05". That is weak enough for
+		// ordinary binary traffic to hit: one packet in 911 of plain HTTP
+		// video delivery in testdata netflix.pcap matched with msgLen=3, and in
+		// production the reject rule then drops the connection and XDP-bans the
+		// CDN address. Require the surrounding stream to look like BitTorrent
+		// as well.
+		return messageChainPlausible(payload, 4+int(msgLen))
 
 	case 0x06: // Request
 		return msgLen == 13

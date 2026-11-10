@@ -43,6 +43,14 @@ func manageRouter(s *Server, logFactory log.Factory) http.Handler {
 	r.Put("/inbounds/{tag}/users/{name}", updateUser(s))
 	r.Delete("/inbounds/{tag}/users/{name}", deleteUser(s))
 
+	// Per-user bandwidth caps. These deliberately break the convention above:
+	// they rewrite the config file AND take effect in the running instance, so
+	// no /apply — and therefore no dropped sessions — is needed to change a
+	// cap. //H
+	r.Get("/limits", listLimits(s))
+	r.Put("/limits/{name}", setLimit(s))
+	r.Delete("/limits/{name}", deleteLimit(s))
+
 	return r
 }
 

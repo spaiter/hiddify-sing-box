@@ -25,14 +25,12 @@ import (
 	"github.com/sagernet/sing-box/protocol/direct"
 	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing-box/protocol/group/balancer"
-	"github.com/sagernet/sing-box/protocol/hiddify/dnstt"
 	"github.com/sagernet/sing-box/protocol/hiddify/gooserelay"
 	"github.com/sagernet/sing-box/protocol/hiddify/hinvalid"
-	"github.com/sagernet/sing-box/protocol/hiddify/masterdns"
-	"github.com/sagernet/sing-box/protocol/hiddify/soar" //H
 	"github.com/sagernet/sing-box/protocol/hiddify/xray"
 	"github.com/sagernet/sing-box/protocol/http"
 	"github.com/sagernet/sing-box/protocol/masque"
+	"github.com/sagernet/sing-box/protocol/masquewg" //H
 	"github.com/sagernet/sing-box/protocol/mieru"
 	"github.com/sagernet/sing-box/protocol/mixed"
 	"github.com/sagernet/sing-box/protocol/mtproto"
@@ -42,7 +40,6 @@ import (
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/shadowtls"
 	snellprotocol "github.com/sagernet/sing-box/protocol/snell"
-	"github.com/sagernet/sing-box/protocol/masquewg" //H
 	"github.com/sagernet/sing-box/protocol/socks"
 	"github.com/sagernet/sing-box/protocol/ssh"
 	"github.com/sagernet/sing-box/protocol/tor"
@@ -84,7 +81,7 @@ func InboundRegistry() *inbound.Registry {
 	vmess.RegisterInbound(registry)
 	trojan.RegisterInbound(registry)
 	naive.RegisterInbound(registry)
-	mtproto.RegisterInbound(registry) //H
+	mtproto.RegisterInbound(registry)  //H
 	masquewg.RegisterInbound(registry) //H
 	shadowtls.RegisterInbound(registry)
 	vless.RegisterInbound(registry)
@@ -129,10 +126,8 @@ func OutboundRegistry() *outbound.Registry {
 	mieru.RegisterOutbound(registry)
 	hinvalid.RegisterOutbound(registry)
 	xray.RegisterOutbound(registry)
-	dnstt.RegisterOutbound(registry)
+	registerDNSResolverOutbounds(registry) //H: dnstt, masterdns, soar; unlicensed hmrd dependency, build tag with_dnstt
 	gooserelay.RegisterOutbound(registry)
-	masterdns.RegisterOutbound(registry)
-	soar.RegisterOutbound(registry) //H
 	balancer.RegisterLoadBalance(registry)
 	group.RegisterFallback(registry) //H
 	registerSudokuOutbound(registry) //H

@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/quic-go/masque-go"
 	qgo "github.com/quic-go/quic-go"
@@ -48,10 +49,11 @@ type Outbound struct {
 	device     *awg.Device
 	dnsRouter  adapter.DNSRouter
 
-	mu              sync.Mutex
-	started         bool
-	conn            *masque.Conn
-	outerPacketConn net.PacketConn
+	mu       sync.Mutex
+	started  bool
+	cancel   context.CancelFunc
+	loopDone chan struct{}
+	flow     net.PacketConn
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MASQUEWGOutboundOptions) (adapter.Outbound, error) {
@@ -123,7 +125,88 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	}, nil
 }
 
+// PostStart brings the WireGuard device up and leaves the MASQUE flow to a
+// background loop, as the other endpoints do with their peers: a server that is
+// unreachable now must not stop the whole core, and one that goes away later is
+// redialled rather than leaving the device deaf. //H
 func (o *Outbound) PostStart() error {
+	if err := o.device.Start(adapter.StartStateStart); err != nil {
+		return E.Cause(err, "masque-wg: start wireguard device")
+	}
+	ctx, cancel := context.WithCancel(o.ctx)
+	o.mu.Lock()
+	o.started = true
+	o.cancel = cancel
+	o.loopDone = make(chan struct{})
+	o.mu.Unlock()
+	go o.connectLoop(ctx)
+	return nil
+}
+
+const (
+	minRedialDelay = time.Second
+	maxRedialDelay = 30 * time.Second
+	// dialTimeout bounds one attempt past the QUIC handshake, which has its own
+	// timeout: a server that completes QUIC but never answers the CONNECT-UDP
+	// request would otherwise hold the loop forever.
+	dialTimeout = 20 * time.Second
+)
+
+func (o *Outbound) connectLoop(ctx context.Context) {
+	defer close(o.loopDone)
+	delay := minRedialDelay
+	for {
+		flow, err := o.connect(ctx)
+		if ctx.Err() != nil {
+			if flow != nil {
+				flow.Close()
+			}
+			return
+		}
+		if err != nil {
+			o.logger.Error(err, "; retrying in ", delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			delay = min(delay*2, maxRedialDelay)
+			continue
+		}
+		delay = minRedialDelay
+		o.mu.Lock()
+		o.flow = flow
+		o.mu.Unlock()
+		f := o.bind.SetConn(flow)
+		o.logger.Info("masque-wg: tunnel up (WireGuard over MASQUE CONNECT-UDP to ", o.serverAddr, ")")
+		select {
+		case <-ctx.Done():
+			return
+		case <-o.bind.lost:
+		}
+		o.bind.drop(f)
+		o.mu.Lock()
+		o.flow = nil
+		o.mu.Unlock()
+		flow.Close()
+		o.logger.Warn("masque-wg: MASQUE flow to ", o.serverAddr, " lost, redialling")
+	}
+}
+
+// connect dials one CONNECT-UDP flow. The returned connection also closes the
+// outer UDP socket it rides on.
+func (o *Outbound) connect(ctx context.Context) (net.PacketConn, error) {
+	var (
+		outerMu sync.Mutex
+		outer   net.PacketConn
+	)
+	closeOuter := func() {
+		outerMu.Lock()
+		if outer != nil {
+			outer.Close()
+		}
+		outerMu.Unlock()
+	}
 	tr := &masque.Transport{
 		TLSClientConfig: o.tlsConfig,
 		QUICConfig:      &qgo.Config{EnableDatagrams: true, InitialPacketSize: 1350},
@@ -137,43 +220,54 @@ func (o *Outbound) PostStart() error {
 			if err != nil {
 				return nil, err
 			}
-			conn, err := qgo.Dial(ctx, packetConn, udpAddr, tlsConf, quicConf)
-			if err != nil {
-				packetConn.Close()
-				return nil, err
-			}
-			o.mu.Lock()
-			o.outerPacketConn = packetConn
-			o.mu.Unlock()
-			return conn, nil
+			outerMu.Lock()
+			outer = packetConn
+			outerMu.Unlock()
+			return qgo.Dial(ctx, packetConn, udpAddr, tlsConf, quicConf)
 		},
 	}
 	// The server locks the CONNECT-UDP target to its WG port, so the requested
 	// target here is only used to expand the URI template; any valid host:port works.
-	req, err := masque.NewRequest(o.ctx, o.template, "127.0.0.1:10863")
+	// The request lives as long as the flow, so it carries the loop's context and
+	// the attempt is bounded by closing its socket instead.
+	req, err := masque.NewRequest(ctx, o.template, "127.0.0.1:10863")
 	if err != nil {
-		return E.Cause(err, "masque-wg: build request")
+		return nil, E.Cause(err, "masque-wg: build request")
 	}
+	// Closing the outer socket is the one thing that interrupts every step of
+	// the dial, so both the timeout and the outbound's Close end it that way.
+	timer := time.AfterFunc(dialTimeout, closeOuter)
+	stopOnClose := context.AfterFunc(ctx, closeOuter)
+	defer stopOnClose()
 	pconn, rsp, err := tr.Dial(req)
+	if !timer.Stop() && err == nil {
+		pconn.Close()
+		err = E.New("timed out")
+	}
+	if err == nil && pconn == nil {
+		err = E.New("dial returned nil conn")
+	}
+	if err == nil && rsp != nil && rsp.StatusCode/100 != 2 {
+		pconn.Close()
+		err = E.New("proxy rejected CONNECT-UDP, status ", rsp.StatusCode)
+	}
 	if err != nil {
-		return E.Cause(err, "masque-wg: establish CONNECT-UDP")
+		closeOuter()
+		return nil, E.Cause(err, "masque-wg: establish CONNECT-UDP to ", o.serverAddr)
 	}
-	if pconn == nil {
-		return E.New("masque-wg: dial returned nil conn")
-	}
-	if rsp != nil && rsp.StatusCode/100 != 2 {
-		return E.New("masque-wg: proxy rejected CONNECT-UDP, status ", rsp.StatusCode)
-	}
-	o.bind.SetConn(pconn)
-	if err := o.device.Start(adapter.StartStateStart); err != nil {
-		return E.Cause(err, "masque-wg: start wireguard device")
-	}
-	o.mu.Lock()
-	o.conn = pconn
-	o.started = true
-	o.mu.Unlock()
-	o.logger.Info("masque-wg: tunnel up (WireGuard over MASQUE CONNECT-UDP to ", o.serverAddr, ")")
-	return nil
+	return &flowConn{PacketConn: pconn, closeOuter: closeOuter}, nil
+}
+
+// flowConn closes the outer socket together with the flow.
+type flowConn struct {
+	net.PacketConn
+	closeOuter func()
+}
+
+func (c *flowConn) Close() error {
+	err := c.PacketConn.Close()
+	c.closeOuter()
+	return err
 }
 
 func (o *Outbound) ready() bool {
@@ -222,19 +316,26 @@ func (o *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 func (o *Outbound) Close() error {
 	o.mu.Lock()
 	dev := o.device
-	conn := o.conn
-	outerPacketConn := o.outerPacketConn
+	cancel := o.cancel
+	loopDone := o.loopDone
 	o.started = false
-	o.outerPacketConn = nil
+	o.cancel = nil
 	o.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-loopDone
+	}
+	// The device first: its Close waits for the bind's receivers, which the
+	// bind wakes itself, and its last packets still have a flow to go out on.
 	if dev != nil {
 		dev.Close()
 	}
-	if conn != nil {
-		conn.Close()
-	}
-	if outerPacketConn != nil {
-		outerPacketConn.Close()
+	o.mu.Lock()
+	flow := o.flow
+	o.flow = nil
+	o.mu.Unlock()
+	if flow != nil {
+		flow.Close()
 	}
 	return nil
 }

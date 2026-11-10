@@ -62,6 +62,7 @@ type Server struct {
 
 	configManager    *ConfigManager
 	userStatsManager *UserStatsManager
+	userLimits       *userLimitRegistry
 
 	externalController       bool
 	externalUI               string
@@ -98,6 +99,7 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		externalUIDownloadURL:    options.ExternalUIDownloadURL,
 		externalUIDownloadDetour: options.ExternalUIDownloadDetour,
 		cleaner:                  cleanup.Add(trafficManager.Clear),
+		userLimits:               newUserLimitRegistry(options.UserLimits),
 	}
 	s.urlTestHistory = service.PtrFromContext[urltest.HistoryStorage](ctx)
 	if s.urlTestHistory == nil {
@@ -245,12 +247,17 @@ func (s *Server) TrafficManager() *trafficontrol.Manager {
 	return s.trafficManager
 }
 
+// The limiter wraps the tracker, not the reverse: it has to be the outermost
+// wrapper for its WriterReplaceable() == false to stop sing from unwrapping
+// down to the raw socket and splicing around the cap. See userlimit.go.
 func (s *Server) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) net.Conn {
-	return trafficontrol.NewTCPTracker(conn, s.trafficManager, metadata, s.outbound, matchedRule, matchOutbound)
+	tracked := trafficontrol.NewTCPTracker(conn, s.trafficManager, metadata, s.outbound, matchedRule, matchOutbound)
+	return s.userLimits.WrapConn(ctx, metadata.User, tracked)
 }
 
 func (s *Server) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) N.PacketConn {
-	return trafficontrol.NewUDPTracker(conn, s.trafficManager, metadata, s.outbound, matchedRule, matchOutbound)
+	tracked := trafficontrol.NewUDPTracker(conn, s.trafficManager, metadata, s.outbound, matchedRule, matchOutbound)
+	return s.userLimits.WrapPacketConn(ctx, metadata.User, tracked)
 }
 
 type noopFlowTracker struct{}

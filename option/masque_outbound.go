@@ -48,6 +48,8 @@ type MASQUEOutboundOptions struct { //H
 	VHTTP string `json:"vhttp,omitempty"`
 	// ServerName is the TLS server name; consumer-masque.cloudflareclient.com when empty.
 	ServerName string `json:"server_name,omitempty"`
+	// Port overrides the port of the endpoints (443 by default). spaiter-vpn sets it from its WARP settings. //H
+	Port uint16 `json:"port,omitempty"` //H
 }
 
 // WARPMASQUEOptions makes a warp endpoint use MASQUE instead of WireGuard: the endpoint

@@ -204,6 +204,9 @@ func (w *Outbound) startTunnel(appConfig *Config) error {
 		}
 		peer = M.SocksaddrFrom(addresses[0], peer.Port)
 	}
+	if options.Port != 0 { //H
+		appConfig.EndpointPort = int(options.Port) //H
+	} //H
 	endpoint, h2Endpoint, mode, err := selectEndpoints(ctx, logger, appConfig, mode, options.UseIPv6, peer, scan)
 	if err != nil {
 		return E.New("failed to select endpoint: ", err)

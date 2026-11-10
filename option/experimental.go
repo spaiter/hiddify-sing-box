@@ -47,6 +47,14 @@ type ClashAPIOptions struct {
 	AccessControlAllowPrivateNetwork bool                       `json:"access_control_allow_private_network,omitempty"`
 	ConfigOutputPath                 string                     `json:"config_output_path,omitempty"`
 
+	// UserLimits caps bandwidth per user, keyed by the same user name the
+	// per-user stats are keyed by. It lives here, next to those stats, rather
+	// than on each inbound's user entry: every protocol carries its own user
+	// type, so a per-user field would have to be added to a dozen option
+	// structs and read back out of every one of them, while the limiter only
+	// ever needs the name that InboundContext.User already carries. //H
+	UserLimits map[string]UserLimitOptions `json:"user_limits,omitempty"` //H
+
 	// Deprecated: migrated to global cache file
 	CacheFile string `json:"cache_file,omitempty" schema:"omit"`
 	// Deprecated: migrated to global cache file
@@ -57,6 +65,16 @@ type ClashAPIOptions struct {
 	StoreSelected bool `json:"store_selected,omitempty" schema:"omit"`
 	// Deprecated: migrated to global cache file
 	StoreFakeIP bool `json:"store_fakeip,omitempty" schema:"omit"`
+}
+
+// UserLimitOptions is one user's bandwidth cap, in megabits per second as the
+// user-facing unit. Zero means unlimited in that direction, so a user with
+// only DownloadMbps set is throttled on the way down and untouched on the way
+// up. Directions are named from the client's point of view: download is what
+// the server writes to the client. //H
+type UserLimitOptions struct { //H
+	DownloadMbps float64 `json:"download_mbps,omitempty"`
+	UploadMbps   float64 `json:"upload_mbps,omitempty"`
 }
 
 type V2RayAPIOptions struct {

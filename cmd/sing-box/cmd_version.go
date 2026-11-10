@@ -29,7 +29,13 @@ func printVersion(cmd *cobra.Command, args []string) {
 		os.Stdout.WriteString(C.Version + "\n")
 		return
 	}
-	version := "hiddify-sing-box version " + C.Version + "\n\n"
+	// Not the upstream name. sing-box's licence carries a clause beyond
+	// GPL-3.0 forbidding derivative works from using its name or implying
+	// association, and a binary announcing itself as "hiddify-sing-box" is
+	// using it. Same reasoning that named the published image
+	// spaiter-vpn-core. Factual attribution belongs in
+	// THIRD-PARTY-NOTICES.md, which is where the GPL asks for it. //H
+	version := "spaiter-vpn-core version " + C.Version + "\n\n"
 	version += "Environment: " + runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH + "\n"
 
 	var tags string

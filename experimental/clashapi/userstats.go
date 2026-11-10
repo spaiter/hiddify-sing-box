@@ -19,7 +19,22 @@ type userAccumulator struct {
 	connCount atomic.Int64
 }
 
+// inboundAccumulator is one user's closed connections on one inbound.
+type inboundAccumulator struct {
+	userAccumulator
+	bulkConns   atomic.Int64 // connections that downloaded at least bulkConnBytes
+	maxDownload atomic.Int64 // the largest single connection's download
+}
+
+// bulkConnBytes separates a connection that carried a sustained stream from
+// one that carried a request. A censor that lets a handshake and a small
+// response through but cuts sustained streams leaves an inbound with many
+// connections and few bulk ones; the per-inbound table exists to make that
+// visible. //H
+const bulkConnBytes = 1 << 20
+
 type UserStatsManager struct {
+	inboundAccumulators  sync.Map // "user\x00inbound" -> *inboundAccumulator
 	db                   *sql.DB
 	logger               log.Logger
 	accumulators         sync.Map // string -> *userAccumulator
@@ -55,6 +70,21 @@ func newUserStatsManager(logger log.Logger, dbPath string) (*UserStatsManager, e
 		download   INTEGER NOT NULL DEFAULT 0,
 		conn_count INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (user, date, resource)
+	)`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS user_inbounds_daily (
+		user         TEXT    NOT NULL,
+		date         TEXT    NOT NULL,
+		inbound      TEXT    NOT NULL,
+		upload       INTEGER NOT NULL DEFAULT 0,
+		download     INTEGER NOT NULL DEFAULT 0,
+		conn_count   INTEGER NOT NULL DEFAULT 0,
+		bulk_conns   INTEGER NOT NULL DEFAULT 0,
+		max_download INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (user, date, inbound)
 	)`)
 	if err != nil {
 		db.Close()
@@ -156,6 +186,57 @@ func (m *UserStatsManager) ConnectionClosed(user string) {
 	}
 }
 
+// ConnectionFinished accounts a closed connection to its inbound.
+func (m *UserStatsManager) ConnectionFinished(user string, inbound string, upload, download int64) {
+	if inbound == "" {
+		inbound = "-"
+	}
+	v, _ := m.inboundAccumulators.LoadOrStore(resourceKey(user, inbound), &inboundAccumulator{})
+	acc := v.(*inboundAccumulator)
+	acc.upload.Add(upload)
+	acc.download.Add(download)
+	acc.connCount.Add(1)
+	if download >= bulkConnBytes {
+		acc.bulkConns.Add(1)
+	}
+	for {
+		current := acc.maxDownload.Load()
+		if download <= current || acc.maxDownload.CompareAndSwap(current, download) {
+			break
+		}
+	}
+}
+
+func (m *UserStatsManager) flushInbounds(tx *sql.Tx, today string) {
+	stmt, err := tx.Prepare(`INSERT INTO user_inbounds_daily (user, date, inbound, upload, download, conn_count, bulk_conns, max_download)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user, date, inbound) DO UPDATE SET
+			upload = upload + excluded.upload,
+			download = download + excluded.download,
+			conn_count = conn_count + excluded.conn_count,
+			bulk_conns = bulk_conns + excluded.bulk_conns,
+			max_download = MAX(max_download, excluded.max_download)`)
+	if err != nil {
+		m.logger.Error("user inbound stats flush prepare: ", err)
+		return
+	}
+	defer stmt.Close()
+	m.inboundAccumulators.Range(func(key, value any) bool {
+		acc := value.(*inboundAccumulator)
+		conns := acc.connCount.Swap(0)
+		if conns == 0 {
+			return true
+		}
+		up, down := acc.upload.Swap(0), acc.download.Swap(0)
+		bulk, largest := acc.bulkConns.Swap(0), acc.maxDownload.Swap(0)
+		user, inbound := parseResourceKey(key.(string))
+		if _, err := stmt.Exec(user, today, inbound, up, down, conns, bulk, largest); err != nil {
+			m.logger.Error("user inbound stats flush exec for ", user, "/", inbound, ": ", err)
+		}
+		return true
+	})
+}
+
 func (m *UserStatsManager) flush() {
 	today := time.Now().UTC().Format("2006-01-02")
 	tx, err := m.db.Begin()
@@ -200,6 +281,7 @@ func (m *UserStatsManager) flush() {
 			conn_count = conn_count + excluded.conn_count`)
 	if err != nil {
 		m.logger.Error("user resource stats flush prepare: ", err)
+		m.flushInbounds(tx, today)
 		tx.Commit()
 		return
 	}
@@ -221,6 +303,8 @@ func (m *UserStatsManager) flush() {
 		}
 		return true
 	})
+
+	m.flushInbounds(tx, today)
 
 	if err := tx.Commit(); err != nil {
 		m.logger.Error("user stats flush commit: ", err)
@@ -405,6 +489,10 @@ func (m *UserStatsManager) ResetUser(user string) error {
 	if err != nil {
 		return err
 	}
+	_, err = m.db.Exec(`DELETE FROM user_inbounds_daily WHERE user = ?`, user)
+	if err != nil {
+		return err
+	}
 	if acc, ok := m.accumulators.Load(user); ok {
 		a := acc.(*userAccumulator)
 		a.upload.Store(0)
@@ -415,6 +503,12 @@ func (m *UserStatsManager) ResetUser(user string) error {
 	m.resourceAccumulators.Range(func(key, value any) bool {
 		if strings.HasPrefix(key.(string), prefix) {
 			m.resourceAccumulators.Delete(key)
+		}
+		return true
+	})
+	m.inboundAccumulators.Range(func(key, value any) bool {
+		if strings.HasPrefix(key.(string), prefix) {
+			m.inboundAccumulators.Delete(key)
 		}
 		return true
 	})
@@ -430,6 +524,14 @@ func (m *UserStatsManager) ResetAll() error {
 	if err != nil {
 		return err
 	}
+	_, err = m.db.Exec(`DELETE FROM user_inbounds_daily`)
+	if err != nil {
+		return err
+	}
+	m.inboundAccumulators.Range(func(key, value any) bool {
+		m.inboundAccumulators.Delete(key)
+		return true
+	})
 	m.accumulators.Range(func(key, value any) bool {
 		m.accumulators.Delete(key)
 		return true
@@ -439,4 +541,40 @@ func (m *UserStatsManager) ResetAll() error {
 		return true
 	})
 	return nil
+}
+
+// InboundDailyStats is one inbound's day, summed over users. //H
+type InboundDailyStats struct {
+	Date        string `json:"date"`
+	Inbound     string `json:"inbound"`
+	Users       int64  `json:"users"`
+	Upload      int64  `json:"upload"`
+	Download    int64  `json:"download"`
+	ConnCount   int64  `json:"conn_count"`
+	BulkConns   int64  `json:"bulk_conns"`
+	MaxDownload int64  `json:"max_download"`
+}
+
+// GetInboundDaily reads the flushed per-inbound days, newest first.
+// Connections still open, or closed since the last flush, are not in it.
+func (m *UserStatsManager) GetInboundDaily(days int) ([]InboundDailyStats, error) {
+	rows, err := m.db.Query(`SELECT date, inbound, COUNT(DISTINCT user), SUM(upload), SUM(download),
+			SUM(conn_count), SUM(bulk_conns), MAX(max_download)
+		FROM user_inbounds_daily
+		WHERE date >= date('now', '-' || ? || ' days')
+		GROUP BY date, inbound
+		ORDER BY date DESC, SUM(download) DESC`, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []InboundDailyStats
+	for rows.Next() {
+		var d InboundDailyStats
+		if err := rows.Scan(&d.Date, &d.Inbound, &d.Users, &d.Upload, &d.Download, &d.ConnCount, &d.BulkConns, &d.MaxDownload); err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, rows.Err()
 }

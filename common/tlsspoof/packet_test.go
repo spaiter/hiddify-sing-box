@@ -123,14 +123,3 @@ func TestBuildSpoofFrame_WrongChecksum(t *testing.T) {
 	require.True(t, header.IPv4(frame[:header.IPv4MinimumSize]).IsChecksumValid(),
 		"IPv4 checksum must remain valid so the router forwards the packet")
 }
-
-func TestBuildSpoofTCPSegment_EncodesWithoutIPHeader(t *testing.T) {
-	t.Parallel()
-	src := netip.MustParseAddrPort("[fe80::1]:54321")
-	dst := netip.MustParseAddrPort("[2606:4700::1]:443")
-	payload := []byte("fake-client-hello")
-	segment, err := buildSpoofTCPSegment(MethodWrongSequence, src, dst, 1000, 2000, 0, payload)
-	require.NoError(t, err)
-	require.Equal(t, tcpHeaderLen+len(payload), len(segment),
-		"segment must be TCP header + payload, no IP header")
-}

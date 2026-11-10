@@ -96,7 +96,7 @@ func TestBlockablePeerEndpoint(t *testing.T) {
 		{"203.0.113.7", true},
 		{"2001:db8::1", true},
 		// Private is allowed: a peer may legitimately sit on the LAN.
-		{"192.168.178.50", true},
+		{"192.168.1.50", true},
 		// Loopback means a local shim (masque-wg / wdtt relay), not a peer.
 		{"127.0.0.1", false},
 		{"::1", false},

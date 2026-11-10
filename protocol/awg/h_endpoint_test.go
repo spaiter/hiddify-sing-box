@@ -271,9 +271,9 @@ func TestH_RegisterEndpoint(t *testing.T) {
 func TestH_EndpointSetsPeerUser(t *testing.T) {
 	router := &hRecordingRouter{}
 	ep := hTestEndpoint(router)
-	ep.peerUsers = peeruser.New([]peeruser.Peer{
+	ep.peerUsers.Store(peeruser.New([]peeruser.Peer{
 		{User: "alice", AllowedIPs: []netip.Prefix{netip.MustParsePrefix("10.8.0.10/32")}},
-	})
+	}))
 
 	ep.NewConnectionEx(context.Background(), nil, M.ParseSocksaddr("10.8.0.10:40000"), M.ParseSocksaddr("1.1.1.1:443"), nil)
 	require.Equal(t, "alice", router.metadata.User)

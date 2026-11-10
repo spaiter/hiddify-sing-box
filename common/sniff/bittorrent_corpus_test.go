@@ -537,7 +537,7 @@ func TestBitTorrentMessageRejectsShortBitfield(t *testing.T) {
 func TestSnifferListsMatchProduction(t *testing.T) {
 	t.Parallel()
 
-	action, err := rule.NewRuleAction(context.Background(), logger.NOP(), option.RuleAction{
+	action, err := rule.NewRuleAction(logger.NOP(), option.RuleAction{
 		Action: C.RuleActionTypeSniff,
 		SniffOptions: option.RouteActionSniff{
 			Sniffer: badoption.Listable[string]{C.ProtocolBitTorrent},

@@ -188,6 +188,11 @@ func (h *Inbound) Close() error {
 		if h.proxy != nil {
 			h.proxy.Close()
 		}
+		// quic-go does not close a packet conn it was handed, so the port
+		// stayed bound and a reloaded inbound could not listen on it again.
+		if h.listener != nil {
+			err = E.Errors(err, h.listener.Close())
+		}
 	})
 	return err
 }

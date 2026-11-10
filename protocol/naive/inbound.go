@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync/atomic" //H
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -49,9 +50,11 @@ type Inbound struct {
 	listener         *listener.Listener
 	network          []string
 	networkIsDefault bool
-	authenticator    *auth.Authenticator
-	tlsConfig        tls.ServerConfig
-	httpServer       *http.Server
+	// authenticator is swapped whole by ReloadUsers, so a request sees one
+	// user list or the next, never a mixture. //H
+	authenticator atomic.Pointer[auth.Authenticator] //H
+	tlsConfig     tls.ServerConfig
+	httpServer    *http.Server
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.NaiveInboundOptions) (adapter.Inbound, error) {
@@ -68,8 +71,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		}),
 		networkIsDefault: options.Network == "",
 		network:          options.Network.Build(),
-		authenticator:    auth.NewAuthenticator(options.Users),
 	}
+	inbound.authenticator.Store(auth.NewAuthenticator(options.Users)) //H
 	if common.Contains(inbound.network, N.NetworkUDP) {
 		if options.TLS == nil || !options.TLS.Enabled {
 			return nil, E.New("TLS is required for QUIC server")
@@ -157,7 +160,7 @@ func (n *Inbound) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	userName, password, authOk := badhttp.ParseBasicAuth(request.Header.Get("Proxy-Authorization"))
 	if authOk {
-		authOk = n.authenticator.Verify(userName, password)
+		authOk = n.authenticator.Load().Verify(userName, password) //H
 	}
 	if !authOk {
 		rejectHTTP(writer, http.StatusProxyAuthRequired)

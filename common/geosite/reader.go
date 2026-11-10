@@ -104,6 +104,13 @@ func (r *Reader) Read(code string) ([]Item, error) {
 	if !exists {
 		return nil, E.New("code ", code, " not exists!")
 	}
+	if r.domainLength[code] == 0 {
+		// Write records the item count in the metadata and then the items with
+		// no length prefix of their own. varbin.Read falls back to reading such
+		// a prefix when the destination slice is empty, so a code with no items
+		// at all fails with "slice length: EOF" instead of reading back empty.
+		return []Item{}, nil
+	}
 	_, err := r.reader.Seek(r.metadataIndex+int64(index), io.SeekStart)
 	if err != nil {
 		return nil, err

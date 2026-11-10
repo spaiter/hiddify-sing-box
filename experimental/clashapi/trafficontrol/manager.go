@@ -41,6 +41,10 @@ type UserStatsHook interface {
 	PushDownloaded(user string, resource string, n int64)
 	ConnectionOpened(user string, resource string)
 	ConnectionClosed(user string)
+	// ConnectionFinished reports a closed connection's totals by inbound. It
+	// runs once per connection, at close, so it costs nothing per packet; the
+	// price is that a connection is counted on the day it ends. //H
+	ConnectionFinished(user string, inbound string, upload, download int64)
 }
 
 func ExtractResource(metadata adapter.InboundContext) string {
@@ -104,6 +108,14 @@ func (m *Manager) Leave(c Tracker) {
 	if loaded {
 		if m.userStatsHook != nil && metadata.Metadata.User != "" {
 			m.userStatsHook.ConnectionClosed(metadata.Metadata.User)
+			var upload, download int64
+			if metadata.Upload != nil {
+				upload = metadata.Upload.Load()
+			}
+			if metadata.Download != nil {
+				download = metadata.Download.Load()
+			}
+			m.userStatsHook.ConnectionFinished(metadata.Metadata.User, metadata.Metadata.Inbound, upload, download)
 		}
 		closedAt := time.Now()
 		metadata.ClosedAt = closedAt
